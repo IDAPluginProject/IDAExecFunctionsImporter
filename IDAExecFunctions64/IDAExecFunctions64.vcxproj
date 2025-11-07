@@ -102,7 +102,7 @@
     <ClCompile Include="Main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="IDAMaappingStructs.h" />
+    <ClInclude Include="IDAMappingStructs.h" />
     <ClInclude Include="ida_file.h" />
     <ClInclude Include="ida_string.h" />
   </ItemGroup>

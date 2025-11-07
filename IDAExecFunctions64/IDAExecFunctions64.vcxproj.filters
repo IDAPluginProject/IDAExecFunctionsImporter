@@ -26,5 +26,8 @@
     <ClInclude Include="ida_string.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="IDAMaappingStructs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

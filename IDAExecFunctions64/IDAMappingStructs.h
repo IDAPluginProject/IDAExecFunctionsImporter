@@ -1,96 +1,98 @@
 #pragma once
 #include <cstdint>
 
-using StringOffset = uint32_t;
-using OffsetType = uint32_t;
-using InternalOffset = uint32_t;
-
-struct Member
+namespace IDAMappingsLayouts
 {
-	StringOffset Type;
-	StringOffset Name;
+	using StringOffset = uint32_t;
+	using OffsetType = uint32_t;
+	using InternalOffset = uint32_t;
 
-	int32_t Offset;
-	int32_t Size;
-	int32_t ArrayDim;
-	bool bIsPointer;
-	uint8_t BitFieldBitCount; // 0xFF by default if this isn't a bitfield
-};
+	struct Member
+	{
+		StringOffset Type;
+		StringOffset Name;
 
-struct Struct
-{
-	StringOffset Name;
-	StringOffset SuperName;
+		int32_t Offset;
+		int32_t Size;
+		int32_t ArrayDim;
+		bool bIsPointer;
+		uint8_t BitFieldBitCount; // 0xFF by default if this isn't a bitfield
+	};
 
-	int32_t Size;
-	int32_t Alignment;
+	struct Struct
+	{
+		StringOffset Name;
+		StringOffset SuperName;
 
-	int32_t NumMembers;
-	Member Members[1];
-};
+		int32_t Size;
+		int32_t Alignment;
 
-struct EnumValue
-{
-	StringOffset Name;
-	int64_t Value;
-};
+		int32_t NumMembers;
+		Member Members[1];
+	};
 
-struct Enum
-{
-	StringOffset Name;
+	struct EnumValue
+	{
+		StringOffset Name;
+		int64_t Value;
+	};
 
-	int32_t NumValues;
-	EnumValue Values[1];
-};
+	struct Enum
+	{
+		StringOffset Name;
 
-struct ExecFunc
-{
-	StringOffset MangledName;
-	OffsetType OffsetRelativeToImagebase;
-};
+		int32_t NumValues;
+		EnumValue Values[1];
+	};
 
-// VTables, GWorld, GNames, etc.
-struct NamedVariable
-{
-	OffsetType VariableOffset;
+	struct ExecFunc
+	{
+		StringOffset MangledName;
+		OffsetType OffsetRelativeToImagebase;
+	};
 
-	StringOffset Type;
-	StringOffset Name;
-};
+	// VTables, GWorld, GNames, etc.
+	struct NamedVariable
+	{
+		OffsetType VariableOffset;
 
-struct StringData
-{
-	uint16_t StrLenth;
-	const char Utf8StrData[1];
-};
+		StringOffset Type;
+		StringOffset Name;
+	};
 
-struct IDAMappingsHeader
-{
-	uint32_t StringDataSizeBytes;
-	InternalOffset StringDataOffset;
+	struct StringData
+	{
+		uint16_t StrLenth;
+		const char Utf8StrData[1];
+	};
 
-	uint32_t NumEnums;
-	InternalOffset EnumDataOffset;
+	struct IDAMappingsHeader
+	{
+		uint32_t StringDataSizeBytes;
+		InternalOffset StringDataOffset; // StringData
 
-	uint32_t NumStructs;
-	InternalOffset StructDataOffset;
+		uint32_t NumEnums;
+		InternalOffset EnumDataOffset; // Enum
 
-	uint32_t NumGlobalSymbols;
-	InternalOffset GlobalSymbolDataOffset;
+		uint32_t NumStructs;
+		InternalOffset StructDataOffset; // Struct
 
-	uint32_t NumExecFunctions;
-	InternalOffset ExecFunctionDataOffset;
-};
+		uint32_t NumGlobalSymbols;
+		InternalOffset GlobalSymbolDataOffset; // NamedVariable
 
-// This struct is just an example of the later layout of data, don't use this
-struct FileData
-{
-	IDAMappingsHeader Header;
+		uint32_t NumExecFunctions;
+		InternalOffset ExecFunctionDataOffset; // ExecFunc
+	};
 
-	uint8_t Strings[1];
-	Enum Enums[1];
-	Struct Structs[1];
-	NamedVariable GlobalSymbols[1];
-	ExecFunc ExecFunctions[1];
-};
+	// This struct is just an example of the later layout of data, don't use this
+	struct FileData
+	{
+		IDAMappingsHeader Header;
 
+		uint8_t Strings[1];
+		Enum Enums[1];
+		Struct Structs[1];
+		NamedVariable GlobalSymbols[1];
+		ExecFunc ExecFunctions[1];
+	};
+}

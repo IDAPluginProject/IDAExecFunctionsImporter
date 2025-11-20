@@ -3,8 +3,11 @@
 #include <format>
 #include <iostream>
 
-std::string_view IDAMappingsParser::GetNameFromOffset(const IDAMappingsLayouts::StringOffset NameOffset)
+std::string_view IDAMappingsParser::GetNameFromOffset(const IDAMappingsLayouts::StringOffset NameOffset) const
 {
+	if (NameOffset < 0x0)
+		return std::string_view{};
+
 	const IDAMappingsLayouts::IDAMappingsHeader* Header = GetHeader();
 	if (!Header)
 		return std::string_view{};

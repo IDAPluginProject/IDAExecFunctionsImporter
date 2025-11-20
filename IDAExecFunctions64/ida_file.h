@@ -129,6 +129,19 @@ public:
 		return ret;
 	}
 
+	std::vector<uint8_t> read_into_buffer()
+	{
+		std::vector<uint8_t> buffer(size);
+
+		const auto current_pos = pos;
+
+		qfseek(file, 0, SEEK_SET);
+		qfread(file, buffer.data(), size);
+		qfseek(file, current_pos, SEEK_CUR);
+
+		return buffer;
+	}
+
 	bool can_read_more()
 	{
 		return pos < size;

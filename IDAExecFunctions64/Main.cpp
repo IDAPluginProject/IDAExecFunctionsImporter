@@ -14,11 +14,20 @@
 #include "ida_file.h"
 #include "ida_string.h"
 
+#include "IDAMappingsParser.h"
 
+using StructDataType = udt_type_data_t;
 using StructType = tinfo_t;
 using StructMemberType = udm_t;
 using IDAType = tinfo_t;
 
+const char* StringViewToDbgCStr(const std::string_view PotentiallyEmptyView)
+{
+	if (PotentiallyEmptyView.empty())
+		return "";
+
+	return PotentiallyEmptyView.data();
+}
 
 inline StructMemberType CreateMemberVarible(const std::string_view Name, const std::string_view TypeName, uint32_t Offset, uint32_t Size, const bool bIsPointer = false, const uint32_t ArrayDimension = 1, const uint8_t BitFieldBitIndex = 0xFF, const uint8_t BitCount = 1)
 {
@@ -82,10 +91,110 @@ inline StructMemberType CreateMemberVarible(const std::string_view Name, const s
 	return Member;
 }
 
-StructType CreateStruct()
+
+// This currenty doesn't handle super structs
+void LoadStructFromIDAMappings(const IDAMappingsParser& Parser, const IDAMappingsLayouts::Struct& Struct)
 {
+	const std::string_view StructName = Parser.GetNameFromOffset(Struct.Name);
+
+	if (StructName.empty())
+	{
+		warning("Struct had an empty name.\n");
+		return;
+	}
+
+	StructDataType StructData;
+	StructData.effalign = Struct.Alignment;
+	StructData.total_size = Struct.Size;
+	StructData.unpadded_size = Struct.Size;
+	StructData.taudt_bits = TAUDT_CPPOBJ;  // C++ class/struct
+
+	for (int i = 0; i < Struct.NumMembers; i++)
+	{
+		const IDAMappingsLayouts::Member& Member = Struct.Members[i];
+
+		const std::string_view MemberName = Parser.GetNameFromOffset(Member.Name);
+		const std::string_view MemberType = Parser.GetNameFromOffset(Member.Type);
+
+		if (MemberName.empty() || MemberType.empty())
+		{
+			warning("[%s] MemberName or MemberType was empty. MemberName(%s), MemberType(%s), Offset (0x%X), Size (0x%X), ArrayDim (0x%X), bIsPtr(%d), BitFieldBitCount (0x%X)\n",
+				StructName.data(), StringViewToDbgCStr(MemberName), StringViewToDbgCStr(MemberType), Member.Offset, Member.Size, Member.ArrayDim, Member.bIsPointer, Member.BitFieldBitCount);
+		}
+
+		StructMemberType MemberVar = CreateMemberVarible(MemberName, MemberType, Member.Offset, Member.Size, Member.bIsPointer, Member.BitFieldBitCount);
+
+		if (!MemberVar.empty())
+		{
+			StructData.push_back(std::move(MemberVar));
+		}
+	}
+
+	//StructData.push_back(CreateMemberVarible("Field2", "struct FVector", 0x8, sizeof(void*), true));
+
+	StructType StructDecl;
+	StructDecl.create_udt(StructData, BTF_STRUCT);
+
+	if (!StructDecl.set_named_type(get_idati(), StructName.data()))
+	{
+		warning("[%s] Failed to add struct to type-library.\n", StructName);
+	}
+}
+
+void LoadEnumFromIDAMappings(const IDAMappingsParser& Parser, const IDAMappingsLayouts::Enum& Struct)
+{
+
+}
+
+void LoadExecFunctionFromIDAMappings(const IDAMappingsParser& Parser, const IDAMappingsLayouts::ExecFunc& Func)
+{
+	const std::string_view Name = Parser.GetNameFromOffset(Func.MangledName);
+
+	if (Name.empty())
+	{
+		msg("Failed to set ExecFunction name. MangledName (0x%llX), OffsetRelativeToImagebase(0x%llX)\n", Func.MangledName, Func.OffsetRelativeToImagebase);
+		return;
+	}
+
+	if (Func.OffsetRelativeToImagebase == 0x0)
+	{
+		msg("Failed to set ExecFunction name. MangledName (0x%llX), OffsetRelativeToImagebase(0x%llX) Do you want to rename the imagebase????\n", Func.MangledName, Func.OffsetRelativeToImagebase);
+		return;
+	}
+
+	set_name(get_imagebase() + Func.OffsetRelativeToImagebase, Name.data());
+}
+
+void LoadGlobalSymbolFromIDAMappings(const IDAMappingsParser& Parser, const IDAMappingsLayouts::NamedVariable& Variable)
+{
+
+}
+
+void LoadDataFromIDAMappings(ida_file& File)
+{
+	IDAMappingsParser Parser(File);
+
+	Parser.ParseAllEnumsWithCallback(LoadEnumFromIDAMappings);
+	Parser.ParseAllStructsWithCallback(LoadStructFromIDAMappings);
+	Parser.ParseAllExecFunctionsWithCallback(LoadExecFunctionFromIDAMappings);
+	Parser.ParseAllGlobalSymbols(LoadGlobalSymbolFromIDAMappings);
+}
+
+StructType CreateStruct(const std::string_view StructName)
+{
+	StructDataType StructData;
+	StructData.taudt_bits = TAUDT_CPPOBJ;  // C++ class
+
+	StructData.push_back(CreateMemberVarible("Field2", "struct FVector", 0x8, sizeof(void*), true));
+
+	StructType Struct;
+	Struct.create_udt(StructData, BTF_STRUCT);
+
+	if (Struct.set_named_type(get_idati(), "MyClass"))
+
 	return StructType();
 }
+
 
 bool create_class_type()
 {

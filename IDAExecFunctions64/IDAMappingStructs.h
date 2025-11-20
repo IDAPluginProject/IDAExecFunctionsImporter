@@ -40,6 +40,7 @@ namespace IDAMappingsLayouts
 	struct Enum
 	{
 		StringOffset Name;
+		uint8_t UnderlyingTypeSizeBytes;
 
 		int32_t NumValues;
 		EnumValue Values[1];
@@ -66,8 +67,17 @@ namespace IDAMappingsLayouts
 		const char Utf8StrData[1];
 	};
 
+	enum class EIDAMappingsVersion : uint8_t
+	{
+		Initial = 1,
+	};
+
 	struct IDAMappingsHeader
 	{
+		uint8_t Magic; // 0xF3F1
+		EIDAMappingsVersion Version;
+		uint8_t Reserved[0x1];
+
 		uint32_t StringDataSizeBytes;
 		InternalOffset StringDataOffset; // StringData
 

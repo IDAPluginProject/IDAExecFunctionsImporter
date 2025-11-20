@@ -6,11 +6,18 @@
 #include <string>
 #include <functional>
 
+#include "ida_file.h"
 
 class IDAMappingsParser
 {
 private:
 	std::vector<uint8_t> Buffer;
+
+public:
+	IDAMappingsParser(ida_file& File)
+		: Buffer(File.read_into_buffer())
+	{
+	}
 
 private:
 	inline const IDAMappingsLayouts::IDAMappingsHeader* GetHeader() const
@@ -37,7 +44,7 @@ private:
 	const IDAMappingsLayouts::Enum* ParseSingleEnum(const IDAMappingsLayouts::OffsetType CurrentEnumStart, IDAMappingsLayouts::OffsetType& OuEnumDataEnd);
 
 public:
-	std::string_view GetNameFromOffset(const IDAMappingsLayouts::StringOffset NameOffset);
+	std::string_view GetNameFromOffset(const IDAMappingsLayouts::StringOffset NameOffset) const;
 
 	void ParseAllStructsWithCallback(std::function<void(const IDAMappingsParser&, const IDAMappingsLayouts::Struct&)> Callback);
 	void ParseAllEnumsWithCallback(std::function<void(const IDAMappingsParser&, const IDAMappingsLayouts::Enum&)> Callback);

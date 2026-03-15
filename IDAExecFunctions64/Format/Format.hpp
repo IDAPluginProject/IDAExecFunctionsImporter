@@ -1,11 +1,16 @@
 #pragma once
+
 #include <cstdint>
 
-namespace IDAMappingsLayouts
+namespace MappingLayouts
 {
 	using StringOffset = uint32_t;
 	using OffsetType = uint32_t;
 	using InternalOffset = uint32_t;
+
+	static constexpr uint8_t FileMagic = 0xD7;
+
+#pragma pack(push, 1)
 
 	struct Member
 	{
@@ -52,7 +57,6 @@ namespace IDAMappingsLayouts
 		OffsetType OffsetRelativeToImagebase;
 	};
 
-	// VTables, GWorld, GNames, etc.
 	struct NamedVariable
 	{
 		OffsetType VariableOffset;
@@ -63,46 +67,37 @@ namespace IDAMappingsLayouts
 
 	struct StringData
 	{
-		uint16_t StrLenth;
-		const char Utf8StrData[1];
+		uint16_t StringLength;
+		const char Utf8StringData[1];
 	};
 
 	enum class EIDAMappingsVersion : uint8_t
 	{
-		Initial = 1,
+		Initial = 1
 	};
 
 	struct IDAMappingsHeader
 	{
-		uint8_t Magic; // 0xF3F1
+		uint8_t Magic;
 		EIDAMappingsVersion Version;
-		uint8_t Reserved[0x1];
+		uint8_t Reserved;
 
 		uint32_t StringDataSizeBytes;
-		InternalOffset StringDataOffset; // StringData
+		InternalOffset StringDataOffset;
 
 		uint32_t NumEnums;
-		InternalOffset EnumDataOffset; // Enum
+		InternalOffset EnumDataOffset;
 
 		uint32_t NumStructs;
-		InternalOffset StructDataOffset; // Struct
+		InternalOffset StructDataOffset;
 
 		uint32_t NumGlobalSymbols;
-		InternalOffset GlobalSymbolDataOffset; // NamedVariable
+		InternalOffset GlobalSymbolDataOffset;
 
 		uint32_t NumExecFunctions;
-		InternalOffset ExecFunctionDataOffset; // ExecFunc
+		InternalOffset ExecFunctionDataOffset;
 	};
 
-	// This struct is just an example of the later layout of data, don't use this
-	struct FileData
-	{
-		IDAMappingsHeader Header;
+#pragma pack(pop)
 
-		uint8_t Strings[1];
-		Enum Enums[1];
-		Struct Structs[1];
-		NamedVariable GlobalSymbols[1];
-		ExecFunc ExecFunctions[1];
-	};
 }

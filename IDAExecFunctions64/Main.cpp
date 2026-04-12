@@ -3,6 +3,8 @@
 #include <vector>
 #include <cstring>
 
+#define __EA64__
+
 #include <ida.hpp>
 #include <idp.hpp>
 #include <loader.hpp>

@@ -32,6 +32,7 @@ bld/
 [Ll]ogs/
 
 ida-sdk-9.2/
+IDA-SDK/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

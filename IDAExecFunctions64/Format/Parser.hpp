@@ -1,4 +1,5 @@
 #pragma once
+#define __EA64__
 
 #include "Format.hpp"
 

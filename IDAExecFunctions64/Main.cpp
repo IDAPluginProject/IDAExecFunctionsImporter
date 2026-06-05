@@ -421,25 +421,59 @@ ea_t FindWStr(const wchar_t* str, int32_t StrLen)
 
 	return BADADDR;
 }
-ea_t FindWStr2(const char* Str)
+std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
 {
-	string_info_t Si;
-	for (size_t i = 0; i < get_strlist_qty(); i++)
-	{
-		get_strlist_item(&Si, i);
+	std::vector<ea_t> Ret;
 
-		if (Si.type != STRTYPE_C_16)
+	if (!Str || Str[0] == '\0')
+		return Ret;
+
+	auto AddUniqueAddress = [&Ret](const ea_t Address)
+	{
+		if (Address != BADADDR && std::find(Ret.begin(), Ret.end(), Address) == Ret.end())
+			Ret.push_back(Address);
+	};
+
+	std::vector<uchar> Pattern;
+	for (const char* Ch = Str; *Ch; ++Ch)
+	{
+		Pattern.push_back(static_cast<uchar>(*Ch));
+		Pattern.push_back(0);
+	}
+	Pattern.push_back(0);
+	Pattern.push_back(0);
+
+	qvector<uchar> Mask;
+	for (size_t i = 0; i < Pattern.size(); ++i)
+		Mask.push_back('x');
+
+	for (int SegIdx = 0; SegIdx < get_segm_qty(); ++SegIdx)
+	{
+		segment_t* Seg = getnseg(SegIdx);
+		if (!Seg || !(Seg->perm & SEGPERM_READ))
 			continue;
 
-		qstring Content;
-		get_strlit_contents(&Content, Si.ea, Si.length, Si.type);
+		ea_t SearchStart = Seg->start_ea;
+		while (SearchStart < Seg->end_ea)
+		{
+			const ea_t Found = bin_search(
+				SearchStart,
+				Seg->end_ea,
+				Pattern.data(),
+				Mask.begin(),
+				Pattern.size(),
+				BIN_SEARCH_FORWARD
+			);
 
-		std::cerr << Content.c_str() << "\n";
-		if (Content.c_str() == Str)
-			return Si.ea;
+			if (Found == BADADDR)
+				break;
+
+			AddUniqueAddress(Found);
+			SearchStart = Found + 1;
+		}
 	}
 
-	return BADADDR;
+	return Ret;
 }
 
 std::vector<ea_t> GetXRefs(const ea_t Address)
@@ -466,6 +500,22 @@ std::unordered_set<func_t*> GetFunctionsReferencingThisFunction(const ea_t Addre
 		msg("Xref from 0x%llx, type: %d\n", Xref.from, Xref.type);
 		if (func_t* Function = get_func(Xref.from))
 			Ret.insert(Function);
+	}
+
+	return Ret;
+}
+
+std::unordered_set<func_t*> GetFunctionsReferencingAnyAddress(const std::vector<ea_t>& Addresses)
+{
+	std::unordered_set<func_t*> Ret;
+
+	for (const ea_t Address : Addresses)
+	{
+		if (Address == BADADDR)
+			continue;
+
+		std::unordered_set<func_t*> Refs = GetFunctionsReferencingThisFunction(Address);
+		Ret.insert(Refs.begin(), Refs.end());
 	}
 
 	return Ret;
@@ -581,6 +631,28 @@ std::string WStrToStr(const std::wstring& WStr)
 	WideCharToMultiByte(CP_UTF8, 0, WStr.c_str(), static_cast<int>(WStr.size()), Str.data(), SizeNeeded, NULL, NULL);
 
 	return Str;
+}
+
+bool IsUnrealScriptPackagePath(const std::wstring& WStr)
+{
+	return WStr.starts_with(L"/Script/");
+}
+
+std::wstring GetStaticClassObjectNameFromWideRefs(const std::vector<std::wstring>& WStrRefs)
+{
+	for (size_t i = 0; i < WStrRefs.size(); ++i)
+	{
+		if (!IsUnrealScriptPackagePath(WStrRefs[i]))
+			continue;
+
+		if (i > 0 && !WStrRefs[i - 1].empty())
+			return WStrRefs[i - 1];
+
+		if (i + 1 < WStrRefs.size() && !WStrRefs[i + 1].empty())
+			return WStrRefs[i + 1];
+	}
+
+	return {};
 }
 
 void PrintArgLocation(const funcarg_t& Arg)
@@ -718,18 +790,36 @@ std::string GetTypeString(const tinfo_t& InType)
 
 std::unordered_set<func_t*> GetReferenceStaticClassFunctions()
 {
-	ea_t EngineStrAddr = 0x7D89B00;
-	ea_t ActorComponentStrAddr = 0x8678290;
-	ea_t SceneComponentStrAddr = 0x8569F10;
-	ea_t PrimitiveComponentStrAddr = 0x85B9360;
-	ea_t MeshComponentStrAddr = 0x086A8330;
+	const std::vector<ea_t> EngineStrAddrs = FindWideStringLiteralsByContent("/Script/Engine");
+	const std::vector<ea_t> ActorComponentStrAddrs = FindWideStringLiteralsByContent("ActorComponent");
+	const std::vector<ea_t> SceneComponentStrAddrs = FindWideStringLiteralsByContent("SceneComponent");
+	const std::vector<ea_t> PrimitiveComponentStrAddrs = FindWideStringLiteralsByContent("PrimitiveComponent");
+	const std::vector<ea_t> MeshComponentStrAddrs = FindWideStringLiteralsByContent("MeshComponent");
+
+	if (EngineStrAddrs.empty())
+	{
+		msg("GetReferenceStaticClassFunctions: failed to find L\"/Script/Engine\".\n");
+		return {};
+	}
+
+	if (ActorComponentStrAddrs.empty() || SceneComponentStrAddrs.empty() || PrimitiveComponentStrAddrs.empty() || MeshComponentStrAddrs.empty())
+	{
+		msg(
+			"GetReferenceStaticClassFunctions: missing one or more reference class strings. "
+			"ActorComponent=%d SceneComponent=%d PrimitiveComponent=%d MeshComponent=%d\n",
+			static_cast<int>(ActorComponentStrAddrs.size()),
+			static_cast<int>(SceneComponentStrAddrs.size()),
+			static_cast<int>(PrimitiveComponentStrAddrs.size()),
+			static_cast<int>(MeshComponentStrAddrs.size())
+		);
+	}
 
 	// All refs to L"/Script/Engine", which is used in a lot of StaticClass functions
-	std::unordered_set<func_t*>		  EngineStrRefs = GetFunctionsReferencingThisFunction(EngineStrAddr);
-	const std::unordered_set<func_t*> ActorComponentStrRefs = GetFunctionsReferencingThisFunction(ActorComponentStrAddr);
-	const std::unordered_set<func_t*> SceneComponentEngineStrRefs = GetFunctionsReferencingThisFunction(SceneComponentStrAddr);
-	const std::unordered_set<func_t*> PrimitiveComponentStrRefs = GetFunctionsReferencingThisFunction(PrimitiveComponentStrAddr);
-	const std::unordered_set<func_t*> MeshComponentStrRefs = GetFunctionsReferencingThisFunction(MeshComponentStrAddr);
+	std::unordered_set<func_t*>		  EngineStrRefs = GetFunctionsReferencingAnyAddress(EngineStrAddrs);
+	const std::unordered_set<func_t*> ActorComponentStrRefs = GetFunctionsReferencingAnyAddress(ActorComponentStrAddrs);
+	const std::unordered_set<func_t*> SceneComponentEngineStrRefs = GetFunctionsReferencingAnyAddress(SceneComponentStrAddrs);
+	const std::unordered_set<func_t*> PrimitiveComponentStrRefs = GetFunctionsReferencingAnyAddress(PrimitiveComponentStrAddrs);
+	const std::unordered_set<func_t*> MeshComponentStrRefs = GetFunctionsReferencingAnyAddress(MeshComponentStrAddrs);
 
 	// Check all references to the strings L"/Script/Engine" and see if they contain L"ActorComponent", L"SceneComponent", etc. to find the StaticClass functions for those classes
 	std::erase_if(EngineStrRefs, [&](func_t* RefFunc) -> bool
@@ -804,7 +894,8 @@ bool TestFindStrings()
 	std::unordered_set<func_t*> AllStaticClassFunctions = GetFunctionsReferencingThisFunction(LikelyGetPrivateStaticClassBody);
 
 	int count = 0;
-	int NumValidStaticClassCalls = 0x0;
+	int NumNonInlinedStaticClassCandidates = 0x0;
+	int NumNamedStaticClasses = 0x0;
 	for (auto* StaticClassFunc : AllStaticClassFunctions)
 	{
 		//if (count++ > 100)
@@ -814,7 +905,7 @@ bool TestFindStrings()
 		if (FunctionSize < 0x80 || FunctionSize > 0x100)
 			continue; // Some StaticClass calls are inlined and therefore substantially bigger than the average 0xB8 bytes
 
-		NumValidStaticClassCalls++;
+		NumNonInlinedStaticClassCandidates++;
 
 		std::cerr << "StaticClassFunc: 0x" << StaticClassFunc->start_ea << "\n";
 		msg("StaticClassFunc: 0x%llX\n", StaticClassFunc->start_ea);
@@ -826,23 +917,32 @@ bool TestFindStrings()
 		//	std::cout << "WStrRef: " << TargetStr << "\n";
 		//	msg("WStrRef: %s\n", TargetStr.c_str());
 		//}
-		if (WStrRefs.size() > 1)
+		std::wstring ObjectNameWStr = GetStaticClassObjectNameFromWideRefs(WStrRefs);
+		if (ObjectNameWStr.empty())
 		{
-			std::string TargetStr = WStrToStr(WStrRefs[1]);
-			std::cerr << "WStrRef: " << TargetStr << "\n";
-			msg("WStrRef: %s\n", TargetStr.c_str());
+			msg("Skipping StaticClassFunc 0x%llX: could not find class name after /Script package string.\n", StaticClassFunc->start_ea);
+			continue;
 		}
 
-		SetStaticClassNameAndSignature(StaticClassFunc, GetPrefixedName(WStrToStr(WStrRefs[1])), StaticClassFuncType);
+		std::string ObjectName = WStrToStr(ObjectNameWStr);
+		std::cerr << "WStrRef: " << ObjectName << "\n";
+		msg("WStrRef: %s\n", ObjectName.c_str());
+
+		SetStaticClassNameAndSignature(StaticClassFunc, GetPrefixedName(ObjectName), StaticClassFuncType);
+		NumNamedStaticClasses++;
 	}
 
-	std::cerr << "NumStaticClasses: " << NumValidStaticClassCalls << "\n";
-	msg("NumStaticClasses: %llX\n", NumValidStaticClassCalls);
+	std::cerr << "NumStaticClassCandidates: " << NumNonInlinedStaticClassCandidates << "\n";
+	std::cerr << "NumNamedStaticClasses: " << NumNamedStaticClasses << "\n";
+	msg("NumStaticClassCandidates: %llX\n", NumNonInlinedStaticClassCandidates);
+	msg("NumNamedStaticClasses: %llX\n", NumNamedStaticClasses);
 
 	//std::vector<ea_t> AllStaticClassFunctions2 = GetXRefs(LikelyGetPrivateStaticClassBody);
 	//
 	//// [7] = CastFlags
 	//DumpFuncArgs(LikelyGetPrivateStaticClassBody);
+
+	return NumNamedStaticClasses > 0;
 }
 
 struct IDAMappingsPlugin : public plugmod_t
@@ -854,25 +954,23 @@ struct IDAMappingsPlugin : public plugmod_t
 		freopen_s(&Dummy, "CONOUT$", "w", stderr);
 		freopen_s(&Dummy, "CONIN$", "r", stdin);
 
-		const auto&& [PathToDumperGeneratedDirectory, FolderStatus] = AskForSDKFolder("C:\\Dumper-7\\5.6.0-0+UE5-TheIsle");
+		//if (FolderStatus == EAvailableFoldersStatus::None)
+		//	return false;
 
-		if (FolderStatus == EAvailableFoldersStatus::None)
-			return false;
-
-		if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
-		{
-			const fs::path MappingFilePath = FindFileWithExtensionInPath(PathToDumperGeneratedDirectory / "IDAMappings", ".idmap");
-		
-			if (!MappingFilePath.empty())
-				ReadAndParseIDAMappings(MappingFilePath);
-		}
-		if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
-		{
-			const fs::path SDKHeaderFilePath = PathToDumperGeneratedDirectory / "CppSDK" / "SDK.hpp";
-		
-			if (fs::exists(SDKHeaderFilePath))
-				ParseSDKHeaderWithClang(SDKHeaderFilePath);
-		}
+		//if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
+		//{
+		//	const fs::path MappingFilePath = FindFileWithExtensionInPath(PathToDumperGeneratedDirectory / "IDAMappings", ".idmap");
+		//
+		//	if (!MappingFilePath.empty())
+		//		ReadAndParseIDAMappings(MappingFilePath);
+		//}
+		//if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
+		//{
+		//	const fs::path SDKHeaderFilePath = PathToDumperGeneratedDirectory / "CppSDK" / "SDK.hpp";
+		//
+		//	if (fs::exists(SDKHeaderFilePath))
+		//		ParseSDKHeaderWithClang(SDKHeaderFilePath);
+		//}
 
 		std::cerr << "Teststart:" << std::endl;
 

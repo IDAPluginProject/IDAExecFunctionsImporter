@@ -3,7 +3,6 @@
 #include <vector>
 #include <cstring>
 #include <Windows.h>
-#include <iostream>
 
 #define __EA64__
 
@@ -17,6 +16,7 @@
 #include <srclang.hpp>
 #include <search.hpp>
 #include <xref.hpp>
+#include <allins.hpp>
 #include <strlist.hpp>
 #include <unordered_set>
 
@@ -27,12 +27,12 @@
 
 namespace fs = std::filesystem;
 
-enum class EAvailableFoldersStatus : uint8_t
+enum class EAvailableFoldersStatus : uint8
 {
-	None,
-	All,
-	CppSDK,
-	IDAMappings
+	None,        // neither subfolder present, or the selection was invalid
+	All,         // both CppSDK and IDAMappings are present
+	CppSDK,      // only CppSDK is present
+	IDAMappings  // only IDAMappings is present
 };
 
 std::pair<fs::path, EAvailableFoldersStatus> AskForSDKFolder(fs::path DefaultPath)
@@ -40,13 +40,13 @@ std::pair<fs::path, EAvailableFoldersStatus> AskForSDKFolder(fs::path DefaultPat
 	qstring FolderQStr = DefaultPath.string().c_str();
 
 	if (!ask_str(&FolderQStr, HIST_DIR, "Please select a folder containing \"CppSDK\" and \"IDAMappings\" subfolders."))
-		return std::pair{ std::string{}, EAvailableFoldersStatus::None};
+		return std::pair{ std::string{}, EAvailableFoldersStatus::None };
 
 	fs::path Folder;
 	Folder = FolderQStr.c_str();
 
 	fs::path CppSDKPath = Folder / "CppSDK";
-	fs::path IDAMappingsPath = Folder / "CppSDK";
+	fs::path IDAMappingsPath = Folder / "IDAMappings";
 
 	const bool bhasCppSDKFolder      = fs::exists(CppSDKPath) && fs::is_directory(Folder / "CppSDK");
 	const bool bhasIDAMappingsFolder = fs::exists(IDAMappingsPath) && fs::is_directory(Folder / "IDAMappings");
@@ -60,13 +60,13 @@ std::pair<fs::path, EAvailableFoldersStatus> AskForSDKFolder(fs::path DefaultPat
 	if (!bhasCppSDKFolder)
 	{
 		warning("Selected folder doesn't contain 'CppSDK' folder, importing SDK.hpp into IDA won't be available.");
-		return std::pair{ Folder, EAvailableFoldersStatus::CppSDK };
+		return std::pair{ Folder, EAvailableFoldersStatus::IDAMappings };
 	}
 
 	if (!bhasIDAMappingsFolder)
 	{
 		warning("Selected folder doesn't contain 'IDAMappings' folder, importing VTables, ExecFunctions and global variables won't be available.");
-		return std::pair{ Folder, EAvailableFoldersStatus::IDAMappings };
+		return std::pair{ Folder, EAvailableFoldersStatus::CppSDK };
 	}
 
 	return std::pair{ Folder, EAvailableFoldersStatus::All };
@@ -99,90 +99,23 @@ bool ParseSDKHeaderWithClang(const fs::path& HeaderPath)
 	return NumCompilerErrors == 0;
 }
 
-bool IsValidCodePointer(ea_t Address)
-{
-	segment_t* Seg = getseg(Address);
-	if (!Seg)
-		return false;
-
-	return Seg->type == SEG_CODE;
-}
-
-// Force-define a vtable at the given address, returns number of entries found
-int MakeVtable(ea_t Address)
-{
-	const int PtrSize = inf_is_64bit() ? 8 : 4;
-	int EntryCount = 0;
-
-	while (true)
-	{
-		ea_t EntryAddress = Address + (EntryCount * PtrSize);
-
-		// Read the pointer at this slot
-		ea_t FuncPtr = (PtrSize == 8)
-			? get_qword(EntryAddress)
-			: get_dword(EntryAddress);
-
-		if (!IsValidCodePointer(FuncPtr))
-			break;
-
-		// Redefine the slot as a pointer
-		del_items(EntryAddress, DELIT_SIMPLE, PtrSize);
-
-		if (PtrSize == 8)
-			create_qword(EntryAddress, PtrSize);
-		else
-			create_dword(EntryAddress, PtrSize);
-
-		// Make sure IDA treats the target as a function
-		create_insn(FuncPtr);
-		add_func(FuncPtr);
-
-		EntryCount++;
-	}
-
-	return EntryCount;
-}
-
-struct VtableEntry
+struct VTableEntry
 {
 	ea_t SlotAddress;   // address of the pointer slot in the vtable
 	ea_t FuncAddress;   // address of the actual function
 	int  Index;
 };
 
-static void IterateVtable2(ea_t VtableAddress, std::function<void(const VtableEntry&)> Callback)
+static void IterateVTable(ea_t VTableAddress, std::function<void(const VTableEntry&)> Callback)
 {
 	const int PtrSize = inf_is_64bit() ? 8 : 4;
 	int Index = 0;
 
 	while (true)
 	{
-		ea_t SlotAddress = VtableAddress + (Index * PtrSize);
+		ea_t SlotAddress = VTableAddress + (Index * PtrSize);
 
-		ea_t FuncAddress = (PtrSize == 8)
-			? get_qword(SlotAddress)
-			: get_dword(SlotAddress);
-
-		if (!IsValidCodePointer(FuncAddress))
-			break;
-
-		VtableEntry Entry{ SlotAddress, FuncAddress, Index };
-		Callback(Entry);
-
-		Index++;
-	}
-}
-static void IterateVtable(ea_t VtableAddress, std::function<void(const VtableEntry&)> Callback)
-{
-	const int PtrSize = inf_is_64bit() ? 8 : 4;
-	int Index = 0;
-
-	while (true)
-	{
-		ea_t SlotAddress = VtableAddress + (Index * PtrSize);
-
-		// Stop at the next named item (new vtable, function, data symbol, etc.)
+		// Stop at the next named item (new VTable, function, data symbol, etc.)
 		if (Index > 0 && has_name(get_flags(SlotAddress)))
 			break;
 
@@ -204,7 +137,7 @@ static void IterateVtable(ea_t VtableAddress, std::function<void(const VtableEnt
 	}
 }
 
-void SetunctionThisPtrType(ea_t FuncAddress, tinfo_t ThisType)
+void SetFunctionThisPtrType(ea_t FuncAddress, tinfo_t ThisType)
 {
 	// Get the existing function type
 	tinfo_t FuncType;
@@ -251,35 +184,28 @@ void SetunctionThisPtrType(ea_t FuncAddress, tinfo_t ThisType)
 	apply_tinfo(FuncAddress, FuncType, TINFO_DEFINITE);
 }
 
-static void HandleVTableThisPtrRename(ea_t VtableAddress, ea_t SuperVtableAddress, std::string TypeName)
+static void HandleVTableThisPtrRename(ea_t VTableAddress, ea_t SuperVTableAddress, std::string TypeName)
 {
 	tinfo_t StructType;
 	if (!StructType.get_named_type(get_idati(), TypeName.c_str()))
-	{
-		msg("Failed to find type: %s\n", TypeName.c_str());
-		return;
-	}
+		return; // type not imported (e.g. SDK.hpp not parsed) -> skip this-ptr typing silently
 
 	tinfo_t ThisType;
 	ThisType.create_ptr(StructType);
 
-	auto CallSetFunctionThisPtr = [&](const VtableEntry& Entry)
+	auto CallSetFunctionThisPtr = [&](const VTableEntry& Entry)
 	{
-		const ea_t SuperFuncAddressSlot = SuperVtableAddress + Entry.Index * (inf_is_64bit() ? 8 : 4);
+		const ea_t SuperFuncAddressSlot = SuperVTableAddress + Entry.Index * (inf_is_64bit() ? 8 : 4);
 
-		if (SuperVtableAddress && Entry.FuncAddress == get_qword(SuperFuncAddressSlot))
+		if (SuperVTableAddress && Entry.FuncAddress == get_qword(SuperFuncAddressSlot))
 		{
-			//qstring SuperVTableName;
-			//get_name(&SuperVTableName, SuperVtableAddress);
-			//std::cerr << "Super VFT: " << SuperVTableName.c_str() << " Index: 0x" << std::hex << Entry.Index << " matches super vtable, skipping\n";
-			//std::cerr << "Skipping vtable entry at 0x" << std::hex << Entry.SlotAddress << " since it matches the super vtable\n";
 			return;
 		}
 
-		SetunctionThisPtrType(Entry.FuncAddress, ThisType);
+		SetFunctionThisPtrType(Entry.FuncAddress, ThisType);
 	};
 
-	IterateVtable(VtableAddress, CallSetFunctionThisPtr);
+	IterateVTable(VTableAddress, CallSetFunctionThisPtr);
 }
 
 static void LoadOldMapping(const std::vector<uint8_t>& Buffer, ea_t ImageBase)
@@ -287,15 +213,11 @@ static void LoadOldMapping(const std::vector<uint8_t>& Buffer, ea_t ImageBase)
 	size_t Position = 0;
 	const size_t Size = Buffer.size();
 
-	while (Position + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t) <= Size)
+	while (Position + sizeof(uint32_t) + sizeof(uint16_t) <= Size)
 	{
 		uint32_t Offset;
 		memcpy(&Offset, Buffer.data() + Position, sizeof(Offset));
 		Position += sizeof(Offset);
-		
-		uint32_t SuperOffset;
-		memcpy(&SuperOffset, Buffer.data() + Position, sizeof(SuperOffset));
-		Position += sizeof(SuperOffset);
 
 		uint16_t NameLength;
 		memcpy(&NameLength, Buffer.data() + Position, sizeof(NameLength));
@@ -309,17 +231,12 @@ static void LoadOldMapping(const std::vector<uint8_t>& Buffer, ea_t ImageBase)
 
 		set_name(ImageBase + Offset, Name.c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
 
-		static int count = 0;
 		if (Name.ends_with("_VFT"))
-		{
-			msg("Renaming vtable at 0x%llX to %s\n", ImageBase + Offset, Name.c_str());
-			HandleVTableThisPtrRename(ImageBase + Offset, ImageBase + SuperOffset, Name.substr(0, Name.length() - 4));
-			std::cerr << std::hex << "0x" <<count++ << ": " << Name << "\n";
-		}
+			HandleVTableThisPtrRename(ImageBase + Offset, 0, Name.substr(0, Name.length() - 4));
 	}
 }
 
-bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath)
+bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTypes)
 {
 	std::ifstream IDAMappingsFile(IDAMappingsFilePath, std::ios::binary | std::ios::ate);
 	if (!IDAMappingsFile)
@@ -338,7 +255,7 @@ bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath)
 	if (!Buffer.empty() && Buffer[0] == MappingLayouts::FileMagic)
 	{
 		msg("[IDAMappingsImporter] Loading V2 mapping file...\n");
-		LoadMappings(std::move(Buffer), ImageBase);
+		LoadMappings(std::move(Buffer), ImageBase, bImportTypes);
 	}
 	else
 	{
@@ -380,47 +297,6 @@ fs::path FindFileWithExtensionInPath(const fs::path& PathToSearch, std::string E
 	return {};
 }
 
-ea_t FindWStrInIDA(const wchar_t* Str, int32_t StrLen)
-{
-	return bin_search(inf_get_min_ea(), inf_get_max_ea(), (const uchar*)Str, nullptr, StrLen, BIN_SEARCH_FORWARD | BIN_SEARCH_CASE);
-}
-ea_t FindWStr(const wchar_t* str, int32_t StrLen)
-{
-	if (!str)
-		return BADADDR;
-
-	for (int i = 0; i < get_segm_qty(); i++)
-	{
-		segment_t* s = getnseg(i);
-		if (!s)
-			continue;
-
-		// readable, non-writable = typical const data
-		if ((s->perm & SEGPERM_WRITE) || !(s->perm & SEGPERM_READ))
-			continue;
-
-		qvector<char> f;
-
-		for (int i = 0; i < StrLen; i++)
-			f.push_back('x');
-
-		ea_t found = bin_search(
-			s->start_ea,
-			s->end_ea,
-			(const uchar*)str,
-			(const uchar*)f.begin(),
-			StrLen,
-			BIN_SEARCH_FORWARD
-		);
-
-		if (found == BADADDR)
-			break;
-
-		return found; // exact full-string match (incl null)
-	}
-
-	return BADADDR;
-}
 std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
 {
 	std::vector<ea_t> Ret;
@@ -443,14 +319,10 @@ std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
 	Pattern.push_back(0);
 	Pattern.push_back(0);
 
-	qvector<uchar> Mask;
-	for (size_t i = 0; i < Pattern.size(); ++i)
-		Mask.push_back('x');
-
 	for (int SegIdx = 0; SegIdx < get_segm_qty(); ++SegIdx)
 	{
 		segment_t* Seg = getnseg(SegIdx);
-		if (!Seg || !(Seg->perm & SEGPERM_READ))
+		if (!Seg || !(Seg->perm & SEGPERM_READ) || (Seg->perm & SEGPERM_EXEC))
 			continue;
 
 		ea_t SearchStart = Seg->start_ea;
@@ -460,7 +332,7 @@ std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
 				SearchStart,
 				Seg->end_ea,
 				Pattern.data(),
-				Mask.begin(),
+				nullptr,
 				Pattern.size(),
 				BIN_SEARCH_FORWARD
 			);
@@ -476,20 +348,6 @@ std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
 	return Ret;
 }
 
-std::vector<ea_t> GetXRefs(const ea_t Address)
-{
-	std::vector<ea_t> Ret;
-
-	xrefblk_t Xref;
-	for (bool Ok = Xref.first_to(Address, XREF_ALL); Ok; Ok = Xref.next_to())
-	{
-		msg("Xref from 0x%llx, type: %d\n", Xref.from, Xref.type);
-		Ret.push_back(Xref.from);
-	}
-
-	return Ret;
-}
-
 std::unordered_set<func_t*> GetFunctionsReferencingThisFunction(const ea_t Address)
 {
 	std::unordered_set<func_t*> Ret;
@@ -497,7 +355,6 @@ std::unordered_set<func_t*> GetFunctionsReferencingThisFunction(const ea_t Addre
 	xrefblk_t Xref;
 	for (bool Ok = Xref.first_to(Address, XREF_ALL); Ok; Ok = Xref.next_to())
 	{
-		msg("Xref from 0x%llx, type: %d\n", Xref.from, Xref.type);
 		if (func_t* Function = get_func(Xref.from))
 			Ret.insert(Function);
 	}
@@ -548,78 +405,6 @@ static std::vector<ea_t> GetCallTargetsInFunc(func_t* Func)
 	return CallTargets;
 }
 
-// Collect all wide-string (UTF-16LE) xrefs from inside a function, ordered by
-// the address of the referencing instruction (i.e. order of appearance).
-static std::vector<std::wstring> GetWideStringRefsInFunc(func_t* Func)
-{
-	std::vector<std::pair<ea_t, std::wstring>> Refs;
-
-	for (ea_t Addr = Func->start_ea; Addr < Func->end_ea; Addr = next_head(Addr, Func->end_ea))
-	{
-		if (!is_code(get_flags(Addr)))
-			continue;
-
-		insn_t Insn;
-		if (decode_insn(&Insn, Addr) <= 0)
-			continue;
-
-		// Look at every operand for a data reference to a wide string.
-		for (int OpIdx = 0; OpIdx < UA_MAXOP; ++OpIdx)
-		{
-			const op_t& Op = Insn.ops[OpIdx];
-			if (Op.type == o_void)
-				break;
-
-			ea_t TargetEa = BADADDR;
-			if (Op.type == o_mem || Op.type == o_near || Op.type == o_far)
-				TargetEa = Op.addr;
-			else if (Op.type == o_imm)
-				TargetEa = static_cast<ea_t>(Op.value);
-
-			if (TargetEa == BADADDR)
-				continue;
-
-			// Read up to 512 wchars; bail if first word is not a printable ASCII range.
-			const uint16 FirstWord = get_word(TargetEa);
-			if (FirstWord < 0x20 || FirstWord > 0x7E)
-				continue;
-
-			std::wstring Str;
-			for (int CharIdx = 0; CharIdx < 512; ++CharIdx)
-			{
-				const uint16 Ch = get_word(TargetEa + CharIdx * 2);
-				if (Ch == 0)
-					break;
-				if (Ch > 0x7E) // non-ASCII wide char — probably not our string
-				{
-					Str.clear();
-					break;
-				}
-				Str.push_back(static_cast<wchar_t>(Ch));
-			}
-
-			if (!Str.empty())
-				Refs.push_back({ Addr, std::move(Str) });
-		}
-	}
-
-	// Sort by referencing instruction address so we get them in code order.
-	std::sort(Refs.begin(), Refs.end(), [](const auto& A, const auto& B)
-	{
-		return A.first < B.first;
-	});
-
-	// Deduplicate consecutive identical refs (same lea reused).
-	std::vector<std::wstring> Result;
-	for (auto& [Addr, Str] : Refs)
-	{
-		if (Result.empty() || Result.back() != Str)
-			Result.push_back(std::move(Str));
-	}
-
-	return Result;
-}
-
 std::string WStrToStr(const std::wstring& WStr)
 {
 	if (WStr.empty())
@@ -638,74 +423,72 @@ bool IsUnrealScriptPackagePath(const std::wstring& WStr)
 	return WStr.starts_with(L"/Script/");
 }
 
-std::wstring GetStaticClassObjectNameFromWideRefs(const std::vector<std::wstring>& WStrRefs)
+static std::wstring ReadAsciiWideStringAt(ea_t Addr)
 {
-	for (size_t i = 0; i < WStrRefs.size(); ++i)
+	if (Addr == BADADDR)
+		return {};
+
+	const uint16 FirstWord = get_word(Addr);
+	if (FirstWord < 0x20 || FirstWord > 0x7E)
+		return {};
+
+	std::wstring Str;
+	for (int CharIdx = 0; CharIdx < 512; ++CharIdx)
 	{
-		if (!IsUnrealScriptPackagePath(WStrRefs[i]))
+		const uint16 Ch = get_word(Addr + CharIdx * 2);
+		if (Ch == 0)
+			break;
+		if (Ch > 0x7E) // non-ASCII -> not the string we want
+			return {};
+		Str.push_back(static_cast<wchar_t>(Ch));
+	}
+
+	return Str;
+}
+
+static std::string GetStaticClassNameFromBodyCall(func_t* Func, ea_t BodyAddr)
+{
+	constexpr int RegRcx = 1;     // arg 1
+	constexpr int RegRdx = 2;     // arg 2
+	constexpr int NumGpRegs = 16; // rax..r15
+
+	ea_t RegTarget[NumGpRegs];
+	for (int i = 0; i < NumGpRegs; ++i)
+		RegTarget[i] = BADADDR;
+
+	for (ea_t Addr = Func->start_ea; Addr < Func->end_ea; Addr = next_head(Addr, Func->end_ea))
+	{
+		if (!is_code(get_flags(Addr)))
 			continue;
 
-		if (i > 0 && !WStrRefs[i - 1].empty())
-			return WStrRefs[i - 1];
+		insn_t Insn;
+		if (decode_insn(&Insn, Addr) <= 0)
+			continue;
 
-		if (i + 1 < WStrRefs.size() && !WStrRefs[i + 1].empty())
-			return WStrRefs[i + 1];
+		// Track string pointers loaded into registers (directly, or copied between regs)
+		if (Insn.ops[0].type == o_reg && Insn.ops[0].reg < NumGpRegs)
+		{
+			if (Insn.itype == NN_lea)
+				RegTarget[Insn.ops[0].reg] = Insn.ops[1].addr;
+			else if (Insn.itype == NN_mov && Insn.ops[1].type == o_reg && Insn.ops[1].reg < NumGpRegs)
+				RegTarget[Insn.ops[0].reg] = RegTarget[Insn.ops[1].reg];
+		}
+
+		if (is_call_insn(Insn) && Insn.ops[0].type == o_near && Insn.ops[0].addr == BodyAddr)
+		{
+			const std::wstring Package = ReadAsciiWideStringAt(RegTarget[RegRcx]);
+			const std::wstring Name = ReadAsciiWideStringAt(RegTarget[RegRdx]);
+
+			// arg1 should be a "/Script/..." package path and arg2 is the class name
+			if (!Name.empty() && (Package.empty() || IsUnrealScriptPackagePath(Package)))
+				return WStrToStr(Name);
+
+			for (int i = 0; i < NumGpRegs; ++i)
+				RegTarget[i] = BADADDR;
+		}
 	}
 
 	return {};
-}
-
-void PrintArgLocation(const funcarg_t& Arg)
-{
-	const argloc_t& Loc = Arg.argloc;
-
-	if (Loc.is_reg())
-	{
-		qstring RegName;
-		get_reg_name(&RegName, Loc.reg1(), Arg.type.get_size());
-		msg("Arg '%s' is in register: %s\n", Arg.name.c_str(), RegName.c_str());
-	}
-	else if (Loc.is_stkoff())
-	{
-		msg("Arg '%s' is at stack offset: %d\n",
-			Arg.name.c_str(),
-			Loc.stkoff());
-	}
-	else if (Loc.is_scattered())
-	{
-		msg("Arg '%s' is scattered across multiple locations\n", Arg.name.c_str());
-	}
-}
-
-
-void DumpFuncArgs(ea_t FuncAddr)
-{
-	tinfo_t FuncTinfo;
-	if (!get_tinfo(&FuncTinfo, FuncAddr))
-	{
-		msg("No type info for 0x%llx\n", (uint64)FuncAddr);
-		return;
-	}
-
-	func_type_data_t FuncData;
-	if (!FuncTinfo.get_func_details(&FuncData))
-	{
-		msg("Failed to get func details\n");
-		return;
-	}
-
-	msg("Function has %d args:\n", (int)FuncData.size());
-
-	for (int i = 0; i < (int)FuncData.size(); ++i)
-	{
-		const funcarg_t& Arg = FuncData[i];
-
-		qstring TypeStr;
-		Arg.type.print(&TypeStr);
-
-		msg("  [%d] %s %s\n", i, TypeStr.c_str(), Arg.name.c_str());
-		PrintArgLocation(Arg);
-	}
 }
 
 std::unordered_map<std::string, std::pair<char, uint8_t>> PrefixCache;
@@ -752,8 +535,7 @@ tinfo_t BuildStaticClassFuncType()
 	// Attempt to locate UClass in the IDB's type library.
 	if (!UClassType.get_named_type(get_idati(), "UClass"))
 	{
-		// Fallback to void* if the type isn't present to avoid an invalid signature.
-		UClassType.create_typedef(get_idati(), "void");
+		UClassType.create_forward_decl(get_idati(), BTF_STRUCT, "UClass");
 	}
 
 	// Convert UClass to UClass*
@@ -761,8 +543,8 @@ tinfo_t BuildStaticClassFuncType()
 
 	// Prepare the function prototype data.
 	func_type_data_t FuncData;
+	FuncData.clear();            // start from an empty prototype (no arguments)
 	FuncData.rettype = UClassType;
-	FuncData.clear();            // Ensure no arguments are defined.
 
 	// Create the final function tinfo_t.
 	tinfo_t FuncType;
@@ -772,20 +554,6 @@ tinfo_t BuildStaticClassFuncType()
 	}
 
 	return FuncType;
-}
-
-/**
- * Converts a tinfo_t to a human-readable std::string.
- */
-std::string GetTypeString(const tinfo_t& InType)
-{
-	qstring TypeName;
-	if (InType.print(&TypeName))
-	{
-		return std::string(TypeName.c_str());
-	}
-
-	return std::string("UnknownType");
 }
 
 std::unordered_set<func_t*> GetReferenceStaticClassFunctions()
@@ -830,34 +598,28 @@ std::unordered_set<func_t*> GetReferenceStaticClassFunctions()
 	return EngineStrRefs; // At this point EngineStrRefs is a set of only StaticClass functions
 }
 
-ea_t GetMostRefrencedFunctionInStaticClass()
+ea_t GetMostReferencedFunctionInStaticClass()
 {
-	// Vector<Pair<FunctionReferencedByStaticClass, NumReverencesEncountered>
+	// Maps a called function to how many StaticClass functions call it
 	std::unordered_map<ea_t, uint8_t> ReferencedFunctionAndRefCount;
 
 	for (auto* StaticClassFunc : GetReferenceStaticClassFunctions())
 	{
-		std::cerr << "StaticClassFunc: 0x" << StaticClassFunc->start_ea << "\n";
-		msg("StaticClassFunc: 0x%llX\n", StaticClassFunc->start_ea);
-
 		auto FunctionsCalledByStaticClass = GetCallTargetsInFunc(StaticClassFunc);
 		for (auto FunctionCalledByStaticClass : FunctionsCalledByStaticClass)
 		{
-			std::cout << "FunctionCalledByStaticClass: " << FunctionCalledByStaticClass << "\n";
-			msg("FunctionCalledByStaticClass: %llX\n", FunctionCalledByStaticClass);
-
 			ReferencedFunctionAndRefCount[FunctionCalledByStaticClass]++;
 		}
 	}
 
-	ea_t FuncWithMostReferences = NULL;
-	int MaxNumRefsEncoutnered = 0;
+	ea_t FuncWithMostReferences = BADADDR;
+	int MaxNumRefsEncountered = 0;
 	for (auto [ReferencedFunctionAddress, RefCount] : ReferencedFunctionAndRefCount)
 	{
-		if (RefCount > MaxNumRefsEncoutnered)
+		if (RefCount > MaxNumRefsEncountered)
 		{
 			FuncWithMostReferences = ReferencedFunctionAddress;
-			MaxNumRefsEncoutnered = RefCount;
+			MaxNumRefsEncountered = RefCount;
 		}
 	}
 	return FuncWithMostReferences;
@@ -865,82 +627,40 @@ ea_t GetMostRefrencedFunctionInStaticClass()
 
 bool TestFindStrings()
 {
-	constexpr const wchar_t* EngineStr = L"/Script/Engine";
-
-	constexpr const wchar_t* ActorComponentStr = L"ActorComponent";
-	constexpr const wchar_t* SceneComponentStr = L"SceneComponent";
-	constexpr const wchar_t* PrimitiveComponentStr = L"PrimitiveComponent";
-	constexpr const wchar_t* MeshComponentStr = L"MeshComponent";
-
-	bool bCanTypeReturnValueToUClass = true;
-	tinfo_t StructType;
-	if (!StructType.get_named_type(get_idati(), "UClass")) // Creates type if doesn't exist
-	{
-		msg("Failed to find/create type UClass\n");
-		bCanTypeReturnValueToUClass = false;
-	}
-
 	tinfo_t StaticClassFuncType = BuildStaticClassFuncType();
 
-	tinfo_t FuncPtrType;
-	qstring Name;
-	parse_decl(&FuncPtrType, &Name, get_idati(), "UClass*(*)()", PT_SIL);
+	ea_t LikelyGetPrivateStaticClassBody = GetMostReferencedFunctionInStaticClass();
 
-	ea_t LikelyGetPrivateStaticClassBody = GetMostRefrencedFunctionInStaticClass();
+	if (LikelyGetPrivateStaticClassBody == BADADDR)
+		return false;
 
-	if (!LikelyGetPrivateStaticClassBody)
-		return false; 
+	// The shared body every StaticClass() forwards to is UE GetPrivateStaticClassBody
+	set_name(LikelyGetPrivateStaticClassBody, "GetPrivateStaticClassBody", SN_NOCHECK | SN_NOWARN | SN_FORCE);
 
 	std::unordered_set<func_t*> AllStaticClassFunctions = GetFunctionsReferencingThisFunction(LikelyGetPrivateStaticClassBody);
 
-	int count = 0;
 	int NumNonInlinedStaticClassCandidates = 0x0;
 	int NumNamedStaticClasses = 0x0;
 	for (auto* StaticClassFunc : AllStaticClassFunctions)
 	{
-		//if (count++ > 100)
-		//	break;
-
 		const auto FunctionSize = StaticClassFunc->end_ea - StaticClassFunc->start_ea;
 		if (FunctionSize < 0x80 || FunctionSize > 0x100)
 			continue; // Some StaticClass calls are inlined and therefore substantially bigger than the average 0xB8 bytes
 
 		NumNonInlinedStaticClassCandidates++;
 
-		std::cerr << "StaticClassFunc: 0x" << StaticClassFunc->start_ea << "\n";
-		msg("StaticClassFunc: 0x%llX\n", StaticClassFunc->start_ea);
-
-		auto WStrRefs = GetWideStringRefsInFunc(StaticClassFunc);
-		//for (auto& WStrRef : WStrRefs)
-		//{
-		//	std::string TargetStr = WStrToStr(WStrRef);
-		//	std::cout << "WStrRef: " << TargetStr << "\n";
-		//	msg("WStrRef: %s\n", TargetStr.c_str());
-		//}
-		std::wstring ObjectNameWStr = GetStaticClassObjectNameFromWideRefs(WStrRefs);
-		if (ObjectNameWStr.empty())
+		std::string ObjectName = GetStaticClassNameFromBodyCall(StaticClassFunc, LikelyGetPrivateStaticClassBody);
+		if (ObjectName.empty())
 		{
-			msg("Skipping StaticClassFunc 0x%llX: could not find class name after /Script package string.\n", StaticClassFunc->start_ea);
+			msg("Skipping StaticClassFunc 0x%llX: could not read class name argument.\n", StaticClassFunc->start_ea);
 			continue;
 		}
-
-		std::string ObjectName = WStrToStr(ObjectNameWStr);
-		std::cerr << "WStrRef: " << ObjectName << "\n";
-		msg("WStrRef: %s\n", ObjectName.c_str());
-
 		SetStaticClassNameAndSignature(StaticClassFunc, GetPrefixedName(ObjectName), StaticClassFuncType);
 		NumNamedStaticClasses++;
 	}
 
-	std::cerr << "NumStaticClassCandidates: " << NumNonInlinedStaticClassCandidates << "\n";
-	std::cerr << "NumNamedStaticClasses: " << NumNamedStaticClasses << "\n";
-	msg("NumStaticClassCandidates: %llX\n", NumNonInlinedStaticClassCandidates);
-	msg("NumNamedStaticClasses: %llX\n", NumNamedStaticClasses);
-
-	//std::vector<ea_t> AllStaticClassFunctions2 = GetXRefs(LikelyGetPrivateStaticClassBody);
-	//
-	//// [7] = CastFlags
-	//DumpFuncArgs(LikelyGetPrivateStaticClassBody);
+	msg("NumStaticClassCandidates: %d\n", NumNonInlinedStaticClassCandidates);
+	msg("NumNamedStaticClasses: %d\n", NumNamedStaticClasses);
 
 	return NumNamedStaticClasses > 0;
 }
@@ -949,40 +669,72 @@ struct IDAMappingsPlugin : public plugmod_t
 {
 	bool idaapi run(size_t) override
 	{
-		AllocConsole();
-		FILE* Dummy;
-		freopen_s(&Dummy, "CONOUT$", "w", stderr);
-		freopen_s(&Dummy, "CONIN$", "r", stdin);
+		const auto [PathToDumperGeneratedDirectory, FolderStatus] = AskForSDKFolder("C:\\Dumper-7\\");
 
-		//if (FolderStatus == EAvailableFoldersStatus::None)
-		//	return false;
+		if (FolderStatus == EAvailableFoldersStatus::None)
+			return false;
 
-		//if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
-		//{
-		//	const fs::path MappingFilePath = FindFileWithExtensionInPath(PathToDumperGeneratedDirectory / "IDAMappings", ".idmap");
-		//
-		//	if (!MappingFilePath.empty())
-		//		ReadAndParseIDAMappings(MappingFilePath);
-		//}
-		//if (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings)
-		//{
-		//	const fs::path SDKHeaderFilePath = PathToDumperGeneratedDirectory / "CppSDK" / "SDK.hpp";
-		//
-		//	if (fs::exists(SDKHeaderFilePath))
-		//		ParseSDKHeaderWithClang(SDKHeaderFilePath);
-		//}
+		const bool bCppSDKAvailable      = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::CppSDK);
+		const bool bIDAMappingsAvailable = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings);
 
-		std::cerr << "Teststart:" << std::endl;
+		enum class ETypeSource { Idaclang, Mappings, None };
 
-		auto DumpStartTime = std::chrono::high_resolution_clock::now();
-		const bool bIsTrue = TestFindStrings();
-		auto DumpFinishTime = std::chrono::high_resolution_clock::now();
+		qstrvec_t TypeChoices;
+		std::vector<ETypeSource> TypeActions;
 
-		std::chrono::duration<double, std::milli> DumpTime = DumpFinishTime - DumpStartTime;
+		if (bCppSDKAvailable)
+		{
+			TypeChoices.push_back("idaclang (recommended)");
+			TypeActions.push_back(ETypeSource::Idaclang);
+		}
 
-		std::cerr << "\n\nLoading Files took (" << DumpTime.count() << "ms)\n\n\n";
-		std::cerr << "TestResult: " << (int)bIsTrue << std::endl;
+		if (bIDAMappingsAvailable)
+		{
+			TypeChoices.push_back("Mappings");
+			TypeActions.push_back(ETypeSource::Mappings);
+		}
 
+		TypeChoices.push_back("Don't import types");
+		TypeActions.push_back(ETypeSource::None);
+
+		static const char TypeSourceForm[] =
+			"Import UE types\n"
+			"\n"
+			"Source for class/struct types (names + functions import either way):\n"
+			"\n"
+			"  <Type source:b1:0:50::>\n"
+			"\n";
+
+		int TypeSel = 0; // default: first (and recommended) available option
+		if (ask_form(TypeSourceForm, &TypeChoices, &TypeSel) <= 0)
+			return false; // user cancelled
+
+		if (TypeSel < 0 || TypeSel >= static_cast<int>(TypeActions.size()))
+			return false;
+
+		const ETypeSource TypeSource = TypeActions[TypeSel];
+
+		// idaclang is only offered when CppSDK is present which parses SDK.hpp for the types
+		if (TypeSource == ETypeSource::Idaclang)
+		{
+			const fs::path SDKHeaderFilePath = PathToDumperGeneratedDirectory / "CppSDK" / "SDK.hpp";
+
+			if (fs::exists(SDKHeaderFilePath))
+				ParseSDKHeaderWithClang(SDKHeaderFilePath);
+			else
+				msg("[IDAMappingsImporter] CppSDK\\SDK.hpp not found.\n");
+		}
+
+		// Always import the .idmap when present (names / exec-funcs / globals) and only build types from it in Mappings mode
+		if (bIDAMappingsAvailable)
+		{
+			const fs::path MappingFilePath = FindFileWithExtensionInPath(PathToDumperGeneratedDirectory / "IDAMappings", ".idmap");
+
+			if (!MappingFilePath.empty())
+				ReadAndParseIDAMappings(MappingFilePath, TypeSource == ETypeSource::Mappings);
+		}
+
+		TestFindStrings();
 
 		return true;
 	}
@@ -1002,6 +754,6 @@ plugin_t PLUGIN =
 	nullptr,
 	"Load .idmap/.usmap mapping files",
 	"IDA Mappings Importer - Load UE SDK mapping files",
-	"IDAMappingsImporteor",
+	"IDA Mappings Importer",
 	"Ctrl-Alt-D",
 };

@@ -71,10 +71,8 @@ static void LoadGlobalSymbol(const MappingParser& Parser, const MappingLayouts::
 	}
 }
 
-void LoadMappings(std::vector<uint8_t>&& Buffer, ea_t ImageBase)
+static void ImportMappingTypes(MappingParser& Parser)
 {
-	MappingParser Parser(std::move(Buffer));
-
 	for (const auto* EnumInfo : Parser.GetAllEnums())
 		LoadEnum(Parser, *EnumInfo);
 
@@ -139,6 +137,14 @@ void LoadMappings(std::vector<uint8_t>&& Buffer, ea_t ImageBase)
 			continue;
 		PopulateStruct(Parser, CS, Structs, NameMap, bRelativeMode);
 	}
+}
+
+void LoadMappings(std::vector<uint8_t>&& Buffer, ea_t ImageBase, bool bImportTypes)
+{
+	MappingParser Parser(std::move(Buffer));
+
+	if (bImportTypes)
+		ImportMappingTypes(Parser);
 
 	for (const auto* Func : Parser.GetAllExecFunctions())
 		LoadExecFunction(Parser, *Func, ImageBase);

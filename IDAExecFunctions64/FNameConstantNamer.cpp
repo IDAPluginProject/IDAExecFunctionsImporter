@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <bit>
 
 #include <ida.hpp>
 #include <funcs.hpp>
@@ -217,8 +218,8 @@ struct FNameConstructorCandidateStats
 {
 	size_t TwoArgumentCalls = 0;
 	size_t ThreeArgumentCalls = 0;
-	uint8_t TwoArgumentAnchors = 0;
-	uint8_t ThreeArgumentAnchors = 0;
+	uint32_t TwoArgumentAnchors = 0;
+	uint32_t ThreeArgumentAnchors = 0;
 };
 
 static std::optional<FNameConstructorInfo> SelectFNameConstructorCandidate(
@@ -232,13 +233,13 @@ static std::optional<FNameConstructorInfo> SelectFNameConstructorCandidate(
 
 	for (const auto& [Address, Stats] : Candidates)
 	{
-		const uint8_t Anchors = Kind == EFNameConstructorKind::ThreeArguments
+		const uint32_t Anchors = Kind == EFNameConstructorKind::ThreeArguments
 			? Stats.ThreeArgumentAnchors
 			: Stats.TwoArgumentAnchors;
 		const size_t CallCount = Kind == EFNameConstructorKind::ThreeArguments
 			? Stats.ThreeArgumentCalls
 			: Stats.TwoArgumentCalls;
-		const size_t AnchorCount = ((Anchors & 1) != 0 ? 1 : 0) + ((Anchors & 2) != 0 ? 1 : 0);
+		const size_t AnchorCount = static_cast<size_t>(std::popcount(Anchors));
 		if (CallCount == 0)
 			continue;
 
@@ -273,12 +274,17 @@ static std::vector<FNameConstructorInfo> FindFNameConstructors()
 	struct Anchor
 	{
 		const char* Text;
-		uint8_t Bit;
+		uint32_t Bit;
 	};
 	const Anchor Anchors[] =
 	{
 		{ "DiffuseColor", 1 },
-		{ "SwitchDefault", 2 }
+		{ "SwitchDefault", 2 },
+		// Common in non-trivial static-initializer functions where the FName
+		// construction is followed by unrelated initialization and atexit work.
+		{ "BootGlobal", 4 },
+		// Often initialized in a separate guarded block in the same function.
+		{ "Reset", 8 }
 	};
 
 	std::unordered_map<ea_t, FNameConstructorCandidateStats> Candidates;
@@ -345,7 +351,7 @@ static std::vector<FNameConstructorInfo> FindFNameConstructors()
 		Result.push_back(*TwoArgument);
 
 	if (Result.empty())
-		msg("[IDAMappingsImporter] Could not identify an FName constructor from L\"DiffuseColor\" and L\"SwitchDefault\".\n");
+		msg("[IDAMappingsImporter] Could not identify an FName constructor from L\"DiffuseColor\", L\"SwitchDefault\", L\"BootGlobal\", or L\"Reset\".\n");
 	return Result;
 }
 

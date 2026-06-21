@@ -76,7 +76,7 @@ static std::vector<ea_t> GetCallTargetsInFunc(func_t* Func)
 		if (Op.type == o_near || Op.type == o_far)
 			CallTargets.push_back(Op.addr);
 		else if (Op.type == o_mem || Op.type == o_displ)
-			CallTargets.push_back(Op.addr); // indirect — still record it
+			CallTargets.push_back(Op.addr); // indirect â€” still record it
 	}
 
 	return CallTargets;
@@ -169,17 +169,22 @@ std::string GetPrefixedName(const std::string& ObjectName)
 
 std::string GetMangledFunctionNameForStaticclass(const std::string& ClassPrefixedName)
 {
-	return "_ZN" + std::to_string(ClassPrefixedName.length()) + ClassPrefixedName + "11" + "StaticClass" + "Ev";
+	// Windows UE binaries use the Microsoft C++ ABI. StaticClass is a public
+	// static member returning UClass* and taking no arguments.
+	return "?StaticClass@" + ClassPrefixedName + "@@SAPEAVUClass@@XZ";
 }
 
 void SetStaticClassNameAndSignature(func_t* Function, const std::string& ClassPrefixedName, tinfo_t& StaticClassFuncType)
 {
-	set_name(Function->start_ea, GetMangledFunctionNameForStaticclass(ClassPrefixedName).c_str(), SN_FORCE);
+	set_name(
+		Function->start_ea,
+		GetMangledFunctionNameForStaticclass(ClassPrefixedName).c_str(),
+		SN_NOCHECK | SN_NOWARN | SN_FORCE);
 
 	tinfo_t FuncType;
 	if (!get_tinfo(&FuncType, Function->start_ea))
 	{
-		// No type info yet — try to guess it first
+		// No type info yet â€” try to guess it first
 		guess_tinfo(&FuncType, Function->start_ea);
 	}
 

@@ -11,12 +11,16 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="FNameConstantNamer.cpp" />
     <ClCompile Include="Format\Parser.cpp" />
     <ClCompile Include="Import\MappingsImporter.cpp" />
     <ClCompile Include="Import\StructBuilder.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="StaticClassNamer.cpp" />
+    <ClCompile Include="Utility.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="FNameConstantNamer.hpp" />
     <ClInclude Include="Format\Format.hpp" />
     <ClInclude Include="Format\Parser.hpp" />
     <ClInclude Include="Import\ExecRename.hpp" />
@@ -24,6 +28,8 @@
     <ClInclude Include="Import\MappingsImporter.hpp" />
     <ClInclude Include="Import\StructBuilder.hpp" />
     <ClInclude Include="Import\TypeHelpers.hpp" />
+    <ClInclude Include="StaticClassNamer.hpp" />
+    <ClInclude Include="Utility.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -79,6 +85,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessToFile>false</PreprocessToFile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

@@ -1,8 +1,9 @@
 #include <fstream>
-#include <stop_token>
 #include <vector>
 #include <cstring>
-#include <Windows.h>
+#include <unordered_set>
+#include <filesystem>
+#include <stop_token>
 
 #define __EA64__
 
@@ -14,14 +15,6 @@
 #include <nalt.hpp>
 #include <typeinf.hpp>
 #include <srclang.hpp>
-#include <search.hpp>
-#include <xref.hpp>
-#include <allins.hpp>
-#include <strlist.hpp>
-#include <unordered_set>
-#include <unordered_map>
-#include <functional>
-#include <algorithm>
 
 #include <Format/Format.hpp>
 #include <Format/Parser.hpp>
@@ -29,7 +22,8 @@
 #include <Import/ExecRename.hpp>
 #include <Import/ExecSignatures.hpp>
 
-#include <filesystem>
+#include "StaticClassNamer.hpp"
+#include "FNameConstantNamer.hpp"
 
 namespace fs = std::filesystem;
 
@@ -242,8 +236,6 @@ static void LoadOldMapping(const std::vector<uint8_t>& Buffer, ea_t ImageBase)
 	}
 }
 
-void BuildStaticClassPrefixCache(MappingParser& Parser);
-
 bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTypes)
 {
 	std::ifstream IDAMappingsFile(IDAMappingsFilePath, std::ios::binary | std::ios::ate);
@@ -316,390 +308,6 @@ fs::path FindFileWithExtensionInPath(const fs::path& PathToSearch, std::string E
 	return {};
 }
 
-std::vector<ea_t> FindWideStringLiteralsByContent(const char* Str)
-{
-	std::vector<ea_t> Ret;
-
-	if (!Str || Str[0] == '\0')
-		return Ret;
-
-	auto AddUniqueAddress = [&Ret](const ea_t Address)
-	{
-		if (Address != BADADDR && std::find(Ret.begin(), Ret.end(), Address) == Ret.end())
-			Ret.push_back(Address);
-	};
-
-	std::vector<uchar> Pattern;
-	for (const char* Ch = Str; *Ch; ++Ch)
-	{
-		Pattern.push_back(static_cast<uchar>(*Ch));
-		Pattern.push_back(0);
-	}
-	Pattern.push_back(0);
-	Pattern.push_back(0);
-
-	for (int SegIdx = 0; SegIdx < get_segm_qty(); ++SegIdx)
-	{
-		segment_t* Seg = getnseg(SegIdx);
-		if (!Seg || !(Seg->perm & SEGPERM_READ) || (Seg->perm & SEGPERM_EXEC))
-			continue;
-
-		ea_t SearchStart = Seg->start_ea;
-		while (SearchStart < Seg->end_ea)
-		{
-			const ea_t Found = bin_search(
-				SearchStart,
-				Seg->end_ea,
-				Pattern.data(),
-				nullptr,
-				Pattern.size(),
-				BIN_SEARCH_FORWARD
-			);
-
-			if (Found == BADADDR)
-				break;
-
-			AddUniqueAddress(Found);
-			SearchStart = Found + 1;
-		}
-	}
-
-	return Ret;
-}
-
-std::unordered_set<func_t*> GetFunctionsReferencingThisFunction(const ea_t Address)
-{
-	std::unordered_set<func_t*> Ret;
-
-	xrefblk_t Xref;
-	for (bool Ok = Xref.first_to(Address, XREF_ALL); Ok; Ok = Xref.next_to())
-	{
-		if (func_t* Function = get_func(Xref.from))
-			Ret.insert(Function);
-	}
-
-	return Ret;
-}
-
-std::unordered_set<func_t*> GetFunctionsReferencingAnyAddress(const std::vector<ea_t>& Addresses)
-{
-	std::unordered_set<func_t*> Ret;
-
-	for (const ea_t Address : Addresses)
-	{
-		if (Address == BADADDR)
-			continue;
-
-		std::unordered_set<func_t*> Refs = GetFunctionsReferencingThisFunction(Address);
-		Ret.insert(Refs.begin(), Refs.end());
-	}
-
-	return Ret;
-}
-
-// Collect all call targets inside a function's body, in address order.
-static std::vector<ea_t> GetCallTargetsInFunc(func_t* Func)
-{
-	std::vector<ea_t> CallTargets;
-
-	for (ea_t Addr = Func->start_ea; Addr < Func->end_ea; Addr = next_head(Addr, Func->end_ea))
-	{
-		if (!is_code(get_flags(Addr)))
-			continue;
-
-		insn_t Insn;
-		if (decode_insn(&Insn, Addr) <= 0)
-			continue;
-
-		if (!is_call_insn(Insn))
-			continue;
-
-		const op_t& Op = Insn.ops[0];
-		if (Op.type == o_near || Op.type == o_far)
-			CallTargets.push_back(Op.addr);
-		else if (Op.type == o_mem || Op.type == o_displ)
-			CallTargets.push_back(Op.addr); // indirect — still record it
-	}
-
-	return CallTargets;
-}
-
-std::string WStrToStr(const std::wstring& WStr)
-{
-	if (WStr.empty())
-		return std::string();
-
-	const auto SizeNeeded = WideCharToMultiByte(CP_UTF8, 0, WStr.c_str(), static_cast<int>(WStr.size()), NULL, 0, NULL, NULL);
-
-	std::string Str(SizeNeeded, 0);
-	WideCharToMultiByte(CP_UTF8, 0, WStr.c_str(), static_cast<int>(WStr.size()), Str.data(), SizeNeeded, NULL, NULL);
-
-	return Str;
-}
-
-bool IsUnrealScriptPackagePath(const std::wstring& WStr)
-{
-	return WStr.starts_with(L"/Script/");
-}
-
-static std::wstring ReadAsciiWideStringAt(ea_t Addr)
-{
-	if (Addr == BADADDR)
-		return {};
-
-	const uint16 FirstWord = get_word(Addr);
-	if (FirstWord < 0x20 || FirstWord > 0x7E)
-		return {};
-
-	std::wstring Str;
-	for (int CharIdx = 0; CharIdx < 512; ++CharIdx)
-	{
-		const uint16 Ch = get_word(Addr + CharIdx * 2);
-		if (Ch == 0)
-			break;
-		if (Ch > 0x7E) // non-ASCII -> not the string we want
-			return {};
-		Str.push_back(static_cast<wchar_t>(Ch));
-	}
-
-	return Str;
-}
-
-static std::string GetStaticClassNameFromBodyCall(func_t* Func, ea_t BodyAddr)
-{
-	constexpr int RegRcx = 1;     // arg 1
-	constexpr int RegRdx = 2;     // arg 2
-	constexpr int NumGpRegs = 16; // rax..r15
-
-	ea_t RegTarget[NumGpRegs];
-	for (int i = 0; i < NumGpRegs; ++i)
-		RegTarget[i] = BADADDR;
-
-	for (ea_t Addr = Func->start_ea; Addr < Func->end_ea; Addr = next_head(Addr, Func->end_ea))
-	{
-		if (!is_code(get_flags(Addr)))
-			continue;
-
-		insn_t Insn;
-		if (decode_insn(&Insn, Addr) <= 0)
-			continue;
-
-		// Track string pointers loaded into registers (directly, or copied between regs)
-		if (Insn.ops[0].type == o_reg && Insn.ops[0].reg < NumGpRegs)
-		{
-			if (Insn.itype == NN_lea)
-				RegTarget[Insn.ops[0].reg] = Insn.ops[1].addr;
-			else if (Insn.itype == NN_mov && Insn.ops[1].type == o_reg && Insn.ops[1].reg < NumGpRegs)
-				RegTarget[Insn.ops[0].reg] = RegTarget[Insn.ops[1].reg];
-		}
-
-		if (is_call_insn(Insn) && Insn.ops[0].type == o_near && Insn.ops[0].addr == BodyAddr)
-		{
-			const std::wstring Package = ReadAsciiWideStringAt(RegTarget[RegRcx]);
-			const std::wstring Name = ReadAsciiWideStringAt(RegTarget[RegRdx]);
-
-			// arg1 should be a "/Script/..." package path and arg2 is the class name
-			if (!Name.empty() && (Package.empty() || IsUnrealScriptPackagePath(Package)))
-				return WStrToStr(Name);
-
-			for (int i = 0; i < NumGpRegs; ++i)
-				RegTarget[i] = BADADDR;
-		}
-	}
-
-	return {};
-}
-
-std::unordered_map<std::string, std::pair<char, uint8_t>> PrefixCache;
-
-
-std::string GetPrefixedName(const std::string& ObjectName)
-{
-	auto It = PrefixCache.find(ObjectName);
-	if (It != PrefixCache.end())
-	{
-		auto& [Prefix, AccessCounter] = It->second;
-		return Prefix + ObjectName + (AccessCounter++ > 0 ? std::to_string(AccessCounter) : "");
-	}
-
-	return ObjectName;
-}
-
-void BuildStaticClassPrefixCache(MappingParser& Parser)
-{
-	for (const MappingLayouts::Struct* StructInfo : Parser.GetAllStructs())
-	{
-		const std::string_view PrefixedName = Parser.GetNameFromOffset(StructInfo->Name);
-		if (PrefixedName.size() < 2)
-			continue;
-
-		const char Prefix = PrefixedName[0];
-		if (Prefix != 'A' && Prefix != 'U')
-			continue;
-
-		PrefixCache.emplace(std::string(PrefixedName.substr(1)), std::pair<char, uint8_t>{ Prefix, 0 });
-	}
-}
-
-std::string GetMangledFunctionNameForStaticclass(const std::string& ClassPrefixedName)
-{
-	return "_ZN" + std::to_string(ClassPrefixedName.length()) + ClassPrefixedName + "11" + "StaticClass" + "Ev";
-}
-
-void SetStaticClassNameAndSignature(func_t* Function, const std::string& ClassPrefixedName, tinfo_t& StaticClassFuncType)
-{
-	set_name(Function->start_ea, GetMangledFunctionNameForStaticclass(ClassPrefixedName).c_str(), SN_FORCE);
-
-	tinfo_t FuncType;
-	if (!get_tinfo(&FuncType, Function->start_ea))
-	{
-		// No type info yet — try to guess it first
-		guess_tinfo(&FuncType, Function->start_ea);
-	}
-
-	apply_tinfo(Function->start_ea, StaticClassFuncType, TINFO_DEFINITE);
-}
-
-/**
- * Builds a function signature: UClass* FunctionName();
- * Matches Unreal Engine coding style.
- */
-tinfo_t BuildStaticClassFuncType()
-{
-	tinfo_t UClassType;
-	// Attempt to locate UClass in the IDB's type library.
-	if (!UClassType.get_named_type(get_idati(), "UClass"))
-	{
-		UClassType.create_forward_decl(get_idati(), BTF_STRUCT, "UClass");
-	}
-
-	// Convert UClass to UClass*
-	UClassType.create_ptr(UClassType);
-
-	// Prepare the function prototype data.
-	func_type_data_t FuncData;
-	FuncData.clear();            // start from an empty prototype (no arguments)
-	FuncData.rettype = UClassType;
-
-	// Create the final function tinfo_t.
-	tinfo_t FuncType;
-	if (!FuncType.create_func(FuncData))
-	{
-		msg("Error: Failed to create function signature object.\n");
-	}
-
-	return FuncType;
-}
-
-std::unordered_set<func_t*> GetReferenceStaticClassFunctions()
-{
-	const std::vector<ea_t> EngineStrAddrs = FindWideStringLiteralsByContent("/Script/Engine");
-	const std::vector<ea_t> ActorComponentStrAddrs = FindWideStringLiteralsByContent("ActorComponent");
-	const std::vector<ea_t> SceneComponentStrAddrs = FindWideStringLiteralsByContent("SceneComponent");
-	const std::vector<ea_t> PrimitiveComponentStrAddrs = FindWideStringLiteralsByContent("PrimitiveComponent");
-	const std::vector<ea_t> MeshComponentStrAddrs = FindWideStringLiteralsByContent("MeshComponent");
-
-	if (EngineStrAddrs.empty())
-	{
-		msg("GetReferenceStaticClassFunctions: failed to find L\"/Script/Engine\".\n");
-		return {};
-	}
-
-	if (ActorComponentStrAddrs.empty() || SceneComponentStrAddrs.empty() || PrimitiveComponentStrAddrs.empty() || MeshComponentStrAddrs.empty())
-	{
-		msg(
-			"GetReferenceStaticClassFunctions: missing one or more reference class strings. "
-			"ActorComponent=%d SceneComponent=%d PrimitiveComponent=%d MeshComponent=%d\n",
-			static_cast<int>(ActorComponentStrAddrs.size()),
-			static_cast<int>(SceneComponentStrAddrs.size()),
-			static_cast<int>(PrimitiveComponentStrAddrs.size()),
-			static_cast<int>(MeshComponentStrAddrs.size())
-		);
-	}
-
-	// All refs to L"/Script/Engine", which is used in a lot of StaticClass functions
-	std::unordered_set<func_t*>		  EngineStrRefs = GetFunctionsReferencingAnyAddress(EngineStrAddrs);
-	const std::unordered_set<func_t*> ActorComponentStrRefs = GetFunctionsReferencingAnyAddress(ActorComponentStrAddrs);
-	const std::unordered_set<func_t*> SceneComponentEngineStrRefs = GetFunctionsReferencingAnyAddress(SceneComponentStrAddrs);
-	const std::unordered_set<func_t*> PrimitiveComponentStrRefs = GetFunctionsReferencingAnyAddress(PrimitiveComponentStrAddrs);
-	const std::unordered_set<func_t*> MeshComponentStrRefs = GetFunctionsReferencingAnyAddress(MeshComponentStrAddrs);
-
-	// Check all references to the strings L"/Script/Engine" and see if they contain L"ActorComponent", L"SceneComponent", etc. to find the StaticClass functions for those classes
-	std::erase_if(EngineStrRefs, [&](func_t* RefFunc) -> bool
-	{
-		return !ActorComponentStrRefs.contains(RefFunc) && !SceneComponentEngineStrRefs.contains(RefFunc) && !PrimitiveComponentStrRefs.contains(RefFunc) && !MeshComponentStrRefs.contains(RefFunc);
-	});
-
-	return EngineStrRefs; // At this point EngineStrRefs is a set of only StaticClass functions
-}
-
-ea_t GetMostReferencedFunctionInStaticClass()
-{
-	// Maps a called function to how many StaticClass functions call it
-	std::unordered_map<ea_t, uint8_t> ReferencedFunctionAndRefCount;
-
-	for (auto* StaticClassFunc : GetReferenceStaticClassFunctions())
-	{
-		auto FunctionsCalledByStaticClass = GetCallTargetsInFunc(StaticClassFunc);
-		for (auto FunctionCalledByStaticClass : FunctionsCalledByStaticClass)
-		{
-			ReferencedFunctionAndRefCount[FunctionCalledByStaticClass]++;
-		}
-	}
-
-	ea_t FuncWithMostReferences = BADADDR;
-	int MaxNumRefsEncountered = 0;
-	for (auto [ReferencedFunctionAddress, RefCount] : ReferencedFunctionAndRefCount)
-	{
-		if (RefCount > MaxNumRefsEncountered)
-		{
-			FuncWithMostReferences = ReferencedFunctionAddress;
-			MaxNumRefsEncountered = RefCount;
-		}
-	}
-	return FuncWithMostReferences;
-}
-
-bool TestFindStrings()
-{
-	tinfo_t StaticClassFuncType = BuildStaticClassFuncType();
-
-	ea_t LikelyGetPrivateStaticClassBody = GetMostReferencedFunctionInStaticClass();
-
-	if (LikelyGetPrivateStaticClassBody == BADADDR)
-		return false;
-
-	// The shared body every StaticClass() forwards to is UE GetPrivateStaticClassBody
-	set_name(LikelyGetPrivateStaticClassBody, "GetPrivateStaticClassBody", SN_NOCHECK | SN_NOWARN | SN_FORCE);
-
-	std::unordered_set<func_t*> AllStaticClassFunctions = GetFunctionsReferencingThisFunction(LikelyGetPrivateStaticClassBody);
-
-	int NumNonInlinedStaticClassCandidates = 0x0;
-	int NumNamedStaticClasses = 0x0;
-	for (auto* StaticClassFunc : AllStaticClassFunctions)
-	{
-		const auto FunctionSize = StaticClassFunc->end_ea - StaticClassFunc->start_ea;
-		if (FunctionSize < 0x80 || FunctionSize > 0x100)
-			continue; // Some StaticClass calls are inlined and therefore substantially bigger than the average 0xB8 bytes
-
-		NumNonInlinedStaticClassCandidates++;
-
-		std::string ObjectName = GetStaticClassNameFromBodyCall(StaticClassFunc, LikelyGetPrivateStaticClassBody);
-		if (ObjectName.empty())
-		{
-			msg("Skipping StaticClassFunc 0x%llX: could not read class name argument.\n", StaticClassFunc->start_ea);
-			continue;
-		}
-		SetStaticClassNameAndSignature(StaticClassFunc, GetPrefixedName(ObjectName), StaticClassFuncType);
-		NumNamedStaticClasses++;
-	}
-
-	msg("NumStaticClassCandidates: %d\n", NumNonInlinedStaticClassCandidates);
-	msg("NumNamedStaticClasses: %d\n", NumNamedStaticClasses);
-
-	return NumNamedStaticClasses > 0;
-}
-
 struct IDAMappingsPlugin : public plugmod_t
 {
 	IDAMappingsPlugin()
@@ -770,7 +378,7 @@ struct IDAMappingsPlugin : public plugmod_t
 				msg("[IDAMappingsImporter] CppSDK\\SDK.hpp not found.\n");
 		}
 
-		PrefixCache.clear(); // fresh per run since only the V2 path repopulates it
+		ClearStaticClassPrefixCache(); // fresh per run since only the V2 path repopulates it
 		CurrentIdbSignatures().clear(); // same deal: cleared every run so a V1/no-map import can't reuse stale V2 prototypes
 
 		// Always import the .idmap when present (names / exec-funcs / globals) and only build types from it in Mappings mode
@@ -782,7 +390,15 @@ struct IDAMappingsPlugin : public plugmod_t
 				ReadAndParseIDAMappings(MappingFilePath, TypeSource == ETypeSource::Mappings);
 		}
 
-		TestFindStrings();
+		if (!NameAllStaticClassFunctions())
+		{
+			msg("[IDAMappingsImporter] Failed to name all static class functions.\n");
+		}
+
+		if (!NameAllFNameConstructorGlobals())
+		{
+			msg("[IDAMappingsImporter] Failed to name all FName constructor globals.\n");
+		}
 
 		return true;
 	}
@@ -800,7 +416,7 @@ plugin_t PLUGIN =
 	init,
 	nullptr,
 	nullptr,
-	"Load .idmap mapping files",
+	"Load .idmap/.usmap mapping files",
 	"IDA Mappings Importer - Load UE SDK mapping files",
 	"IDA Mappings Importer",
 	"Ctrl-Alt-D",

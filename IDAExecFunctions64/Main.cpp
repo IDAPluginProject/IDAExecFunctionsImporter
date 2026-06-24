@@ -19,9 +19,15 @@
 #include <allins.hpp>
 #include <strlist.hpp>
 #include <unordered_set>
+#include <unordered_map>
+#include <functional>
+#include <algorithm>
 
 #include <Format/Format.hpp>
+#include <Format/Parser.hpp>
 #include <Import/MappingsImporter.hpp>
+#include <Import/ExecRename.hpp>
+#include <Import/ExecSignatures.hpp>
 
 #include <filesystem>
 
@@ -236,6 +242,8 @@ static void LoadOldMapping(const std::vector<uint8_t>& Buffer, ea_t ImageBase)
 	}
 }
 
+void BuildStaticClassPrefixCache(MappingParser& Parser);
+
 bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTypes)
 {
 	std::ifstream IDAMappingsFile(IDAMappingsFilePath, std::ios::binary | std::ios::ate);
@@ -254,7 +262,18 @@ bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTy
 
 	if (!Buffer.empty() && Buffer[0] == MappingLayouts::FileMagic)
 	{
+		// Validate the full header (magic, version, section bounds) before trusting any offsets
+		MappingParser PrefixParser(Buffer);
+		if (!PrefixParser.IsValidHeader())
+		{
+			msg("[IDAMappingsImporter] .idmap header is malformed. Aborting import!\n");
+			return false;
+		}
+
 		msg("[IDAMappingsImporter] Loading V2 mapping file...\n");
+
+		BuildStaticClassPrefixCache(PrefixParser);
+
 		LoadMappings(std::move(Buffer), ImageBase, bImportTypes);
 	}
 	else
@@ -506,6 +525,22 @@ std::string GetPrefixedName(const std::string& ObjectName)
 	return ObjectName;
 }
 
+void BuildStaticClassPrefixCache(MappingParser& Parser)
+{
+	for (const MappingLayouts::Struct* StructInfo : Parser.GetAllStructs())
+	{
+		const std::string_view PrefixedName = Parser.GetNameFromOffset(StructInfo->Name);
+		if (PrefixedName.size() < 2)
+			continue;
+
+		const char Prefix = PrefixedName[0];
+		if (Prefix != 'A' && Prefix != 'U')
+			continue;
+
+		PrefixCache.emplace(std::string(PrefixedName.substr(1)), std::pair<char, uint8_t>{ Prefix, 0 });
+	}
+}
+
 std::string GetMangledFunctionNameForStaticclass(const std::string& ClassPrefixedName)
 {
 	return "_ZN" + std::to_string(ClassPrefixedName.length()) + ClassPrefixedName + "11" + "StaticClass" + "Ev";
@@ -667,6 +702,16 @@ bool TestFindStrings()
 
 struct IDAMappingsPlugin : public plugmod_t
 {
+	IDAMappingsPlugin()
+	{
+		InstallExecRenameAction();
+	}
+
+	~IDAMappingsPlugin()
+	{
+		UninstallExecRenameAction();
+	}
+
 	bool idaapi run(size_t) override
 	{
 		const auto [PathToDumperGeneratedDirectory, FolderStatus] = AskForSDKFolder("C:\\Dumper-7\\");
@@ -725,6 +770,9 @@ struct IDAMappingsPlugin : public plugmod_t
 				msg("[IDAMappingsImporter] CppSDK\\SDK.hpp not found.\n");
 		}
 
+		PrefixCache.clear(); // fresh per run since only the V2 path repopulates it
+		CurrentIdbSignatures().clear(); // same deal: cleared every run so a V1/no-map import can't reuse stale V2 prototypes
+
 		// Always import the .idmap when present (names / exec-funcs / globals) and only build types from it in Mappings mode
 		if (bIDAMappingsAvailable)
 		{
@@ -748,11 +796,11 @@ static plugmod_t* idaapi init()
 plugin_t PLUGIN =
 {
 	IDP_INTERFACE_VERSION,
-	PLUGIN_UNL | PLUGIN_MULTI,
+	PLUGIN_MULTI,
 	init,
 	nullptr,
 	nullptr,
-	"Load .idmap/.usmap mapping files",
+	"Load .idmap mapping files",
 	"IDA Mappings Importer - Load UE SDK mapping files",
 	"IDA Mappings Importer",
 	"Ctrl-Alt-D",

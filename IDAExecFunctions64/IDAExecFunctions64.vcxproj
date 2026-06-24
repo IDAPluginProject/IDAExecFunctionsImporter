@@ -19,6 +19,8 @@
   <ItemGroup>
     <ClInclude Include="Format\Format.hpp" />
     <ClInclude Include="Format\Parser.hpp" />
+    <ClInclude Include="Import\ExecRename.hpp" />
+    <ClInclude Include="Import\ExecSignatures.hpp" />
     <ClInclude Include="Import\MappingsImporter.hpp" />
     <ClInclude Include="Import\StructBuilder.hpp" />
     <ClInclude Include="Import\TypeHelpers.hpp" />
@@ -63,7 +65,7 @@
     <OutDir>C:\Program Files\IDA Professional 9.3\plugins</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>C:\Program Files\IDA Professional 9.3\plugins</OutDir>
+    <OutDir>C:\Program Files\IDA Professional 9.2\plugins</OutDir>
     <IncludePath>$(ProjectDir);$(IncludePath)</IncludePath>
     <PublicIncludeDirectories>$(PublicIncludeDirectories)</PublicIncludeDirectories>
   </PropertyGroup>

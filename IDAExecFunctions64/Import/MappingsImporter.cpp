@@ -1,6 +1,7 @@
 #include <Import/MappingsImporter.hpp>
 #include <Import/StructBuilder.hpp>
 #include <Import/TypeHelpers.hpp>
+#include <Import/ExecSignatures.hpp>
 
 #include <Format/Parser.hpp>
 
@@ -26,12 +27,23 @@ static void LoadEnum(const MappingParser& Parser, const MappingLayouts::Enum& En
 		Type.set_named_type(nullptr, std::string(EnumName).c_str(), NTF_TYPE | NTF_REPLACE);
 }
 
-static void LoadExecFunction(const MappingParser& Parser, const MappingLayouts::ExecFunc& Func, ea_t ImageBase)
+static void LoadExecFunction(const MappingParser& Parser, const MappingLayouts::ExecFunc& Func, ea_t ImageBase, uint32_t Index)
 {
 	const std::string_view Name = Parser.GetNameFromOffset(Func.MangledName);
 
-	if (!Name.empty() && Func.OffsetRelativeToImagebase != 0)
-		set_name(ImageBase + Func.OffsetRelativeToImagebase, std::string(Name).c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
+	if (Name.empty() || Func.OffsetRelativeToImagebase == 0)
+		return;
+
+	const ea_t ThunkEA = ImageBase + Func.OffsetRelativeToImagebase;
+	set_name(ThunkEA, std::string(Name).c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
+
+	const MappingLayouts::StringOffset SignatureOffset = Parser.GetExecFuncSignatureOffset(Index);
+	if (SignatureOffset != static_cast<MappingLayouts::StringOffset>(-1))
+	{
+		const std::string_view Signature = Parser.GetNameFromOffset(SignatureOffset);
+		if (!Signature.empty())
+			RegisterExecSignature(ThunkEA, Signature);
+	}
 }
 
 static void LoadGlobalSymbol(const MappingParser& Parser, const MappingLayouts::NamedVariable& Variable, ea_t ImageBase)
@@ -146,8 +158,9 @@ void LoadMappings(std::vector<uint8_t>&& Buffer, ea_t ImageBase, bool bImportTyp
 	if (bImportTypes)
 		ImportMappingTypes(Parser);
 
-	for (const auto* Func : Parser.GetAllExecFunctions())
-		LoadExecFunction(Parser, *Func, ImageBase);
+	const auto ExecFunctions = Parser.GetAllExecFunctions();
+	for (size_t i = 0; i < ExecFunctions.size(); i++)
+		LoadExecFunction(Parser, *ExecFunctions[i], ImageBase, static_cast<uint32_t>(i));
 
 	for (const auto* Var : Parser.GetAllGlobalSymbols())
 		LoadGlobalSymbol(Parser, *Var, ImageBase);

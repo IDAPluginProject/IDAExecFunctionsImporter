@@ -27,7 +27,7 @@ static void LoadEnum(const MappingParser& Parser, const IDAMappingsLayouts::Enum
 		Type.set_named_type(nullptr, std::string(EnumName).c_str(), NTF_TYPE | NTF_REPLACE);
 }
 
-static void LoadExecFunction(const MappingParser& Parser, const IDAMappingsLayouts::ExecFunc& Func, ea_t ImageBase, uint32_t Index)
+static void LoadExecFunction(const MappingParser& Parser, const IDAMappingsLayouts::ExecFunc& Func, ea_t ImageBase, uint32_t Index, bool bHasCppSDKTypes)
 {
 	const std::string_view Name = Parser.GetNameFromOffset(Func.MangledName);
 
@@ -37,12 +37,36 @@ static void LoadExecFunction(const MappingParser& Parser, const IDAMappingsLayou
 	const ea_t ThunkEA = ImageBase + Func.OffsetRelativeToImagebase;
 	set_name(ThunkEA, std::string(Name).c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
 
-	const IDAMappingsLayouts::StringOffset SignatureOffset = Parser.GetExecFuncSignatureOffset(Index);
-	if (SignatureOffset != static_cast<IDAMappingsLayouts::StringOffset>(-1))
+	if (!Parser.HasMinVersion(IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures))
+		return;
+	
+	if (bHasCppSDKTypes && Func.CppTypeSignature != static_cast<IDAMappingsLayouts::StringOffset>(-1))
 	{
-		const std::string_view Signature = Parser.GetNameFromOffset(SignatureOffset);
-		if (!Signature.empty())
-			RegisterExecSignature(ThunkEA, Signature);
+		const std::string_view Signature = Parser.GetNameFromOffset(Func.CppTypeSignature);
+		
+		if (Signature.empty())
+			return;
+
+		tinfo_t FuncType;
+		qstring OutName;
+		if (parse_decl(&FuncType, &OutName, get_idati(), std::string(Signature).c_str(), PT_SIL | PT_VAR | PT_HIGH | PT_NDC | PT_RELAXED | PT_SEMICOLON))
+		{
+			if (!apply_tinfo(ThunkEA, FuncType, TINFO_DEFINITE))
+			{
+				msg("[IDAMappingsImporter] Failed to apply type for %s at 0x%llX\n", std::string(Name).c_str(), static_cast<uint64>(ThunkEA));
+				return;
+			}
+		}
+	}
+	else
+	{
+		const IDAMappingsLayouts::StringOffset SignatureOffset = Func.FallbackCppSignatureInfo;
+		if (SignatureOffset != static_cast<IDAMappingsLayouts::StringOffset>(-1))
+		{
+			const std::string_view Signature = Parser.GetNameFromOffset(SignatureOffset);
+			if (!Signature.empty())
+				RegisterExecSignature(ThunkEA, Signature);
+		}
 	}
 }
 
@@ -81,6 +105,23 @@ static void LoadGlobalSymbol(const MappingParser& Parser, const IDAMappingsLayou
 		if (LookupType(TypeName.c_str(), Type))
 			apply_tinfo(Addr, Type, TINFO_DEFINITE);
 	}
+}
+
+static void HandleVTableThisPtrRename(MappingParser& Parser, const IDAMappingsLayouts::NamedVTable& VTable, ea_t ImageBase)
+{
+}
+
+static void ApplyVTableName(MappingParser& Parser, const IDAMappingsLayouts::NamedVTable& VTable, ea_t ImageBase)
+{
+	if (VTable.VTableOffset == 0)
+		return;
+
+	const auto Name = Parser.GetNameFromOffset(VTable.Name);
+	if (Name.empty())
+		return;
+
+	const ea_t Addr = ImageBase + VTable.VTableOffset;
+	set_name(Addr, std::string(Name).c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
 }
 
 static void ImportMappingTypes(MappingParser& Parser)
@@ -158,10 +199,22 @@ void LoadMappings(std::vector<uint8_t>&& Buffer, ea_t ImageBase, bool bImportTyp
 	if (bImportTypes)
 		ImportMappingTypes(Parser);
 
+	const bool bHasCppSDKTypes = GHasCppSDKTypes;
+
 	const auto ExecFunctions = Parser.GetAllExecFunctions();
 	for (size_t i = 0; i < ExecFunctions.size(); i++)
-		LoadExecFunction(Parser, *ExecFunctions[i], ImageBase, static_cast<uint32_t>(i));
+		LoadExecFunction(Parser, *ExecFunctions[i], ImageBase, static_cast<uint32_t>(i), bHasCppSDKTypes);
 
 	for (const auto* Var : Parser.GetAllGlobalSymbols())
 		LoadGlobalSymbol(Parser, *Var, ImageBase);
+
+	for (const auto* VTable : Parser.GetAllNamedVTables())
+	{
+		const std::string_view Name = Parser.GetNameFromOffset(VTable->Name);
+		if (Name.empty() || VTable->VTableOffset == 0)
+			continue;
+
+		ApplyVTableName(Parser, *VTable, ImageBase);
+		HandleVTableThisPtrRename(Parser, *VTable, ImageBase);
+	}
 }

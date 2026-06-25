@@ -25,6 +25,7 @@
 #include "StaticClassNamer.hpp"
 #include "FNameConstantNamer.hpp"
 
+
 namespace fs = std::filesystem;
 
 enum class EAvailableFoldersStatus : uint8
@@ -72,10 +73,46 @@ std::pair<fs::path, EAvailableFoldersStatus> AskForSDKFolder(fs::path DefaultPat
 	return std::pair{ Folder, EAvailableFoldersStatus::All };
 }
 
-bool ParseSDKHeaderWithClang(const fs::path& HeaderPath)
+struct CppSDKImportCheck
+{
+public:
+	friend bool ParseSDKHeaderWithClang(const fs::path& HeaderPath, bool bForceImport);
+
+private:
+	static constexpr const char* ImportFlagTypeName = "YesWeImportedTheCppSDK";
+
+private:
+	static inline void CreateImportFlagType()
+	{
+		udt_type_data_t Udt;
+		Udt.total_size = 1;
+		Udt.unpadded_size = 1;
+		Udt.taudt_bits |= TAUDT_CPPOBJ;
+		tinfo_t Type;
+		if (Type.create_udt(Udt, BTF_STRUCT))
+			Type.set_named_type(nullptr, ImportFlagTypeName, NTF_TYPE);
+	}
+
+	static inline bool HasImportFlagType()
+	{
+		tinfo_t TestType;
+		return TypeHelpers::LookupType(ImportFlagTypeName, TestType);
+	}
+};
+
+
+bool ParseSDKHeaderWithClang(const fs::path& HeaderPath, bool bForceImport = false)
 {
 	if (!select_parser_by_srclang(SRCLANG_CPP))
 		return false;
+
+	if (GHasCppSDKTypes && !bForceImport)
+		return true; // Already imported, no need to re-import
+
+	GHasCppSDKTypes = CppSDKImportCheck::HasImportFlagType();
+
+	if (GHasCppSDKTypes && !bForceImport)
+		return true; // Already imported, no need to re-import
 
 	constexpr const char* ClangArgs = "-std=c++20 -Wno-invalid-offsetof -Wno-c++11-narrowing -D IMPORT_CPP_SDK_INTO_IDA=1";
 
@@ -85,6 +122,10 @@ bool ParseSDKHeaderWithClang(const fs::path& HeaderPath)
 		msg("ParseSDKHeaderWithClang: failed to set parser argv. ErrorCode: %d\n", ParserErrorCode);
 		return false;
 	}
+
+	// Create a dummy type so we can later look up whether the CppSDK was imported or not.
+	CppSDKImportCheck::CreateImportFlagType();
+
 
 	// nullptr for til => import straight into the current IDB
 	const int NumCompilerErrors = parse_decls_with_parser("clang", nullptr, HeaderPath.string().c_str(), true);

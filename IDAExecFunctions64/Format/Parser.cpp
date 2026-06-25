@@ -73,12 +73,17 @@ bool MappingParser::IsValidHeader() const
 	if (Header->Magic != IDAMappingsLayouts::FileMagic)
 		return false;
 
-	if (Header->Version != IDAMappingsLayouts::EIDAMappingsVersion::Initial
-		&& Header->Version != IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures)
+	if (Header->Version < IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures)
 		return false;
 
 	if (!CanReadData(Header->StringDataOffset, Header->StringDataSizeBytes))
 		return false;
+
+	if (Header->Version > IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures
+		&& !CanReadData(0, sizeof(IDAMappingsLayouts::IDAMappingsHeader)))
+	{
+		return false;
+	}
 
 	return CanReadData(Header->StructDataOffset, 0)
 		&& CanReadData(Header->EnumDataOffset, 0)
@@ -152,27 +157,49 @@ std::vector<const IDAMappingsLayouts::ExecFunc*> MappingParser::GetAllExecFuncti
 	return Result;
 }
 
-IDAMappingsLayouts::StringOffset MappingParser::GetExecFuncSignatureOffset(uint32_t Index) const
+std::vector<const IDAMappingsLayouts::NamedVTable*> MappingParser::GetAllNamedVTables()
 {
+	std::vector<const IDAMappingsLayouts::NamedVTable*> Result;
+
 	const auto* Header = GetHeader();
 	if (!Header)
-		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+		return Result;
 
-	if (Header->Version < IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures)
-		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+	for (uint32_t i = 0; i < Header->NumVTables; i++)
+	{
+		const auto Offset = Header->VTableDataOffset + (i * sizeof(IDAMappingsLayouts::NamedVTable));
+		const auto* VTable = GetDataAtOffset<IDAMappingsLayouts::NamedVTable>(Offset);
 
-	// GetHeader only guaranteed the v1 fields; ensure the appended v2 field is in bounds too
-	if (!CanReadData(0, sizeof(IDAMappingsLayouts::IDAMappingsHeader)))
-		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+		if (!VTable)
+			break;
 
-	if (Index >= Header->NumExecFunctions)
-		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+		Result.push_back(VTable);
+	}
 
-	const auto Offset = Header->ExecFuncSignatureDataOffset + (Index * sizeof(IDAMappingsLayouts::StringOffset));
-	const auto* SignatureOffset = GetDataAtOffset<IDAMappingsLayouts::StringOffset>(Offset);
-
-	return SignatureOffset ? *SignatureOffset : static_cast<IDAMappingsLayouts::StringOffset>(-1);
+	return Result;
 }
+
+//IDAMappingsLayouts::StringOffset MappingParser::GetExecFuncSignatureOffset(uint32_t Index) const
+//{
+//	const auto* Header = GetHeader();
+//	if (!Header)
+//		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+//
+//	if (Header->Version < IDAMappingsLayouts::EIDAMappingsVersion::WithExecSignatures)
+//		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+//
+//	// GetHeader only guaranteed the v1 fields; ensure the appended v2 field is in bounds too
+//	if (!CanReadData(0, sizeof(IDAMappingsLayouts::IDAMappingsHeader)))
+//		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+//
+//	if (Index >= Header->NumExecFunctions)
+//		return static_cast<IDAMappingsLayouts::StringOffset>(-1);
+//
+//	const auto Offset = Header->ExecFuncSignatureDataOffset + (Index * sizeof(IDAMappingsLayouts::StringOffset));
+//	const auto* SignatureOffset = GetDataAtOffset<IDAMappingsLayouts::StringOffset>(Offset);
+//
+//	return SignatureOffset ? *SignatureOffset : static_cast<IDAMappingsLayouts::StringOffset>(-1);
+//}
 
 std::vector<const IDAMappingsLayouts::NamedVariable*> MappingParser::GetAllGlobalSymbols()
 {

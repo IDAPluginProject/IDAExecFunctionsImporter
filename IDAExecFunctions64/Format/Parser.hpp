@@ -16,7 +16,7 @@ private:
 	const IDAMappingsLayouts::IDAMappingsHeader* GetHeader() const
 	{
 		// Validate only the v1 header fields here; the appended v2 field (ExecFuncSignatureDataOffset) is read separately under a version guard
-		if (!CanReadData(0x0, offsetof(IDAMappingsLayouts::IDAMappingsHeader, ExecFuncSignatureDataOffset)))
+		if (!CanReadData(0x0, offsetof(IDAMappingsLayouts::IDAMappingsHeader, ExecFunctionDataOffset)))
 			return nullptr;
 
 		return reinterpret_cast<const IDAMappingsLayouts::IDAMappingsHeader*>(Buffer.data());
@@ -42,13 +42,21 @@ private:
 public:
 	explicit MappingParser(std::vector<uint8_t> InBuffer) : Buffer(std::move(InBuffer)) {}
 
+public:
 	bool IsValidHeader() const;
+	bool HasMinVersion(IDAMappingsLayouts::EIDAMappingsVersion Version) const
+	{
+		const auto* Header = GetHeader();
+
+		return Header && Header->Version >= Version;
+	}
 
 	std::string_view GetNameFromOffset(IDAMappingsLayouts::StringOffset NameOffset) const;
 
 	std::vector<const IDAMappingsLayouts::Struct*> GetAllStructs();
 	std::vector<const IDAMappingsLayouts::Enum*> GetAllEnums();
 	std::vector<const IDAMappingsLayouts::ExecFunc*> GetAllExecFunctions();
+	std::vector<const IDAMappingsLayouts::NamedVTable*> GetAllNamedVTables();
 	std::vector<const IDAMappingsLayouts::NamedVariable*> GetAllGlobalSymbols();
 	IDAMappingsLayouts::StringOffset GetExecFuncSignatureOffset(uint32_t Index) const;
 };

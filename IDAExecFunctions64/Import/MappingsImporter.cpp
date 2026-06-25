@@ -5,7 +5,7 @@
 
 #include <Format/Parser.hpp>
 
-static void LoadEnum(const MappingParser& Parser, const MappingLayouts::Enum& EnumInfo)
+static void LoadEnum(const MappingParser& Parser, const IDAMappingsLayouts::Enum& EnumInfo)
 {
 	const std::string_view EnumName = Parser.GetNameFromOffset(EnumInfo.Name);
 	if (EnumName.empty())
@@ -27,7 +27,7 @@ static void LoadEnum(const MappingParser& Parser, const MappingLayouts::Enum& En
 		Type.set_named_type(nullptr, std::string(EnumName).c_str(), NTF_TYPE | NTF_REPLACE);
 }
 
-static void LoadExecFunction(const MappingParser& Parser, const MappingLayouts::ExecFunc& Func, ea_t ImageBase, uint32_t Index)
+static void LoadExecFunction(const MappingParser& Parser, const IDAMappingsLayouts::ExecFunc& Func, ea_t ImageBase, uint32_t Index)
 {
 	const std::string_view Name = Parser.GetNameFromOffset(Func.MangledName);
 
@@ -37,8 +37,8 @@ static void LoadExecFunction(const MappingParser& Parser, const MappingLayouts::
 	const ea_t ThunkEA = ImageBase + Func.OffsetRelativeToImagebase;
 	set_name(ThunkEA, std::string(Name).c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
 
-	const MappingLayouts::StringOffset SignatureOffset = Parser.GetExecFuncSignatureOffset(Index);
-	if (SignatureOffset != static_cast<MappingLayouts::StringOffset>(-1))
+	const IDAMappingsLayouts::StringOffset SignatureOffset = Parser.GetExecFuncSignatureOffset(Index);
+	if (SignatureOffset != static_cast<IDAMappingsLayouts::StringOffset>(-1))
 	{
 		const std::string_view Signature = Parser.GetNameFromOffset(SignatureOffset);
 		if (!Signature.empty())
@@ -46,7 +46,7 @@ static void LoadExecFunction(const MappingParser& Parser, const MappingLayouts::
 	}
 }
 
-static void LoadGlobalSymbol(const MappingParser& Parser, const MappingLayouts::NamedVariable& Variable, ea_t ImageBase)
+static void LoadGlobalSymbol(const MappingParser& Parser, const IDAMappingsLayouts::NamedVariable& Variable, ea_t ImageBase)
 {
 	using namespace TypeHelpers;
 
@@ -95,7 +95,7 @@ static void ImportMappingTypes(MappingParser& Parser)
 	{
 		CollectedStruct CS;
 		CS.Name = std::string(Parser.GetNameFromOffset(S->Name));
-		CS.SuperName = (S->SuperName != static_cast<MappingLayouts::StringOffset>(-1)) ? std::string(Parser.GetNameFromOffset(S->SuperName)) : "";
+		CS.SuperName = (S->SuperName != static_cast<IDAMappingsLayouts::StringOffset>(-1)) ? std::string(Parser.GetNameFromOffset(S->SuperName)) : "";
 		CS.FileSize = S->Size;
 		CS.Alignment = S->Alignment;
 		CS.Raw = S;

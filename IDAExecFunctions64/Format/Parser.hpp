@@ -1,7 +1,7 @@
 #pragma once
 #define __EA64__
 
-#include "Format.hpp"
+#include "IDAMappingLayout.hpp"
 
 #include <vector>
 #include <string>
@@ -13,13 +13,13 @@ class MappingParser
 private:
 	std::vector<uint8_t> Buffer;
 
-	const MappingLayouts::IDAMappingsHeader* GetHeader() const
+	const IDAMappingsLayouts::IDAMappingsHeader* GetHeader() const
 	{
 		// Validate only the v1 header fields here; the appended v2 field (ExecFuncSignatureDataOffset) is read separately under a version guard
-		if (!CanReadData(0x0, offsetof(MappingLayouts::IDAMappingsHeader, ExecFuncSignatureDataOffset)))
+		if (!CanReadData(0x0, offsetof(IDAMappingsLayouts::IDAMappingsHeader, ExecFuncSignatureDataOffset)))
 			return nullptr;
 
-		return reinterpret_cast<const MappingLayouts::IDAMappingsHeader*>(Buffer.data());
+		return reinterpret_cast<const IDAMappingsLayouts::IDAMappingsHeader*>(Buffer.data());
 	}
 
 	bool CanReadData(size_t Offset, size_t Size) const
@@ -36,19 +36,19 @@ private:
 		return nullptr;
 	}
 	
-	const MappingLayouts::Struct* ParseSingleStruct(MappingLayouts::OffsetType CurrentStructStart, MappingLayouts::OffsetType& OutStructDataEnd);
-	const MappingLayouts::Enum* ParseSingleEnum(MappingLayouts::OffsetType CurrentEnumStart, MappingLayouts::OffsetType& OutEnumDataEnd);
+	const IDAMappingsLayouts::Struct* ParseSingleStruct(IDAMappingsLayouts::OffsetType CurrentStructStart, IDAMappingsLayouts::OffsetType& OutStructDataEnd);
+	const IDAMappingsLayouts::Enum* ParseSingleEnum(IDAMappingsLayouts::OffsetType CurrentEnumStart, IDAMappingsLayouts::OffsetType& OutEnumDataEnd);
 
 public:
 	explicit MappingParser(std::vector<uint8_t> InBuffer) : Buffer(std::move(InBuffer)) {}
 
 	bool IsValidHeader() const;
 
-	std::string_view GetNameFromOffset(MappingLayouts::StringOffset NameOffset) const;
+	std::string_view GetNameFromOffset(IDAMappingsLayouts::StringOffset NameOffset) const;
 
-	std::vector<const MappingLayouts::Struct*> GetAllStructs();
-	std::vector<const MappingLayouts::Enum*> GetAllEnums();
-	std::vector<const MappingLayouts::ExecFunc*> GetAllExecFunctions();
-	std::vector<const MappingLayouts::NamedVariable*> GetAllGlobalSymbols();
-	MappingLayouts::StringOffset GetExecFuncSignatureOffset(uint32_t Index) const;
+	std::vector<const IDAMappingsLayouts::Struct*> GetAllStructs();
+	std::vector<const IDAMappingsLayouts::Enum*> GetAllEnums();
+	std::vector<const IDAMappingsLayouts::ExecFunc*> GetAllExecFunctions();
+	std::vector<const IDAMappingsLayouts::NamedVariable*> GetAllGlobalSymbols();
+	IDAMappingsLayouts::StringOffset GetExecFuncSignatureOffset(uint32_t Index) const;
 };

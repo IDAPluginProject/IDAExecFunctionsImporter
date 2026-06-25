@@ -71,7 +71,7 @@ static bool BuildAndSaveStruct(udt_type_data_t& Udt, const char* Name, int NtfFl
 	return true;
 }
 
-static tinfo_t ResolveMemberType(const MappingParser& Parser, const MappingLayouts::Member& Member)
+static tinfo_t ResolveMemberType(const MappingParser& Parser, const IDAMappingsLayouts::Member& Member)
 {
 	using namespace TypeHelpers;
 
@@ -126,7 +126,7 @@ void PopulateStruct(const MappingParser& Parser, const CollectedStruct& CS, cons
 {
 	using namespace TypeHelpers;
 
-	const MappingLayouts::Struct& Struct = *CS.Raw;
+	const IDAMappingsLayouts::Struct& Struct = *CS.Raw;
 
 	uint32_t SuperTotalSize = 0;
 	if (!CS.SuperName.empty())
@@ -166,7 +166,7 @@ void PopulateStruct(const MappingParser& Parser, const CollectedStruct& CS, cons
 	std::vector<TempMember> Members;
 	for (int i = 0; i < Struct.NumMembers; i++)
 	{
-		const MappingLayouts::Member& Member = Struct.Members[i];
+		const IDAMappingsLayouts::Member& Member = Struct.Members[i];
 		const std::string MemberName(Parser.GetNameFromOffset(Member.Name));
 
 		if (MemberName.empty() || Parser.GetNameFromOffset(Member.Type).empty())

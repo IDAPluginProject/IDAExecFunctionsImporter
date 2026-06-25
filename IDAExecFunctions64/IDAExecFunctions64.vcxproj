@@ -21,7 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FNameConstantNamer.hpp" />
-    <ClInclude Include="Format\Format.hpp" />
+    <ClInclude Include="Format\IDAMappingLayout.hpp" />
     <ClInclude Include="Format\Parser.hpp" />
     <ClInclude Include="Import\ExecRename.hpp" />
     <ClInclude Include="Import\ExecSignatures.hpp" />

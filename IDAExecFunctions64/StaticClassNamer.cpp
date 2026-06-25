@@ -180,7 +180,7 @@ void BuildStaticClassPrefixCache(MappingParser& Parser)
 	// .idmap struct names are C++-prefixed (ACharacter, UObject, ...). The raw name a
 	// StaticClass() call passes is the rest, and the leading char is the prefix. Only
 	// A/U types are UClasses with a StaticClass(), so skip everything else.
-	for (const MappingLayouts::Struct* StructInfo : Parser.GetAllStructs())
+	for (const IDAMappingsLayouts::Struct* StructInfo : Parser.GetAllStructs())
 	{
 		const std::string_view PrefixedName = Parser.GetNameFromOffset(StructInfo->Name);
 		if (PrefixedName.size() < 2)

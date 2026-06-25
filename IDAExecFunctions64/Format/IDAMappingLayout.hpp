@@ -2,13 +2,15 @@
 
 #include <cstdint>
 
-namespace MappingLayouts
+namespace IDAMappingsLayouts
 {
 	using StringOffset = uint32_t;
 	using OffsetType = uint32_t;
 	using InternalOffset = uint32_t;
 
 	static constexpr uint8_t FileMagic = 0xD7;
+
+	static constexpr StringOffset InvalidStringOffset = 0xFFFFFFFF;
 
 #pragma pack(push, 1)
 
@@ -55,13 +57,24 @@ namespace MappingLayouts
 	{
 		StringOffset MangledName;
 		OffsetType OffsetRelativeToImagebase;
+
+		StringOffset CppTypeSignature; // Use this one when the SDK was imported with clang
+		StringOffset FallbackCppSignatureInfo; // Fallback for manual import
 	};
+
 
 	struct NamedVariable
 	{
 		OffsetType VariableOffset;
 
 		StringOffset Type;
+		StringOffset Name;
+	};
+
+	struct NamedVTable
+	{
+		OffsetType VTableOffset;
+		OffsetType SuperVTableOffset;
 		StringOffset Name;
 	};
 
@@ -94,6 +107,9 @@ namespace MappingLayouts
 
 		uint32_t NumGlobalSymbols;
 		InternalOffset GlobalSymbolDataOffset;
+
+		uint32_t NumVTables;
+		InternalOffset VTableDataOffset;
 
 		uint32_t NumExecFunctions;
 		InternalOffset ExecFunctionDataOffset;

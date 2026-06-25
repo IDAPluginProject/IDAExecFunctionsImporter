@@ -10,7 +10,7 @@
 #include <ida.hpp>
 #include <typeinf.hpp>
 
-#include <Format/Format.hpp>
+#include <Format/IDAMappingLayout.hpp>
 
 class MappingParser;
 
@@ -20,7 +20,7 @@ struct CollectedStruct
 	std::string SuperName;
 	int32_t FileSize;
 	int32_t Alignment;
-	const MappingLayouts::Struct* Raw;
+	const IDAMappingsLayouts::Struct* Raw;
 	uint32_t TotalSize;
 };
 

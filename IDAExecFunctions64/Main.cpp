@@ -16,7 +16,7 @@
 #include <typeinf.hpp>
 #include <srclang.hpp>
 
-#include <Format/Format.hpp>
+#include <Format/IDAMappingLayout.hpp>
 #include <Format/Parser.hpp>
 #include <Import/MappingsImporter.hpp>
 #include <Import/ExecRename.hpp>
@@ -252,7 +252,7 @@ bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTy
 
 	const ea_t ImageBase = get_imagebase();
 
-	if (!Buffer.empty() && Buffer[0] == MappingLayouts::FileMagic)
+	if (!Buffer.empty() && Buffer[0] == IDAMappingsLayouts::FileMagic)
 	{
 		// Validate the full header (magic, version, section bounds) before trusting any offsets
 		MappingParser PrefixParser(Buffer);

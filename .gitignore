@@ -313,6 +313,10 @@ __pycache__/
 # tools/**
 # !tools/packages.config
 
+# Local IDA smoke-test helpers
+tools/ida_quick_exit.py
+tools/ida_shutdown_smoke.py
+
 # Tabs Studio
 *.tss
 

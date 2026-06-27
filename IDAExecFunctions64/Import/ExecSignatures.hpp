@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <netnode.hpp>
 #include <typeinf.hpp>
 #include <loader.hpp>
 
@@ -34,6 +36,7 @@ struct RegisteredExecSignature
 	bool              bHasCppUnmangledName = false;
 	std::string       CppTypeSignature;
 	std::string       CppUnmangledName;
+	std::string       FallbackEncodedSignature;
 	ExecFuncSignature FallbackSignature;
 };
 
@@ -47,6 +50,15 @@ inline std::map<ea_t, RegisteredExecSignature>& CurrentIdbSignatures()
 
 namespace ExecSignatureDetail
 {
+	static constexpr const char* PersistNodeName = "$ idamappings exec signatures";
+	static constexpr uchar PersistBlobTag = 'E';
+	static constexpr nodeidx_t PersistBlobIndex = 0;
+	static constexpr uint32_t PersistMagic = 0x58454944; // "DIEX"
+	static constexpr uint32_t PersistVersion = 1;
+	static constexpr uint8_t PersistFlagCppTypeSignature = 1 << 0;
+	static constexpr uint8_t PersistFlagFallbackSignature = 1 << 1;
+	static constexpr uint8_t PersistFlagCppUnmangledName = 1 << 2;
+
 	inline std::vector<std::string> Split(std::string_view Text, char Delimiter)
 	{
 		std::vector<std::string> Parts;
@@ -64,6 +76,54 @@ namespace ExecSignatureDetail
 		}
 
 		return Parts;
+	}
+
+	inline void AppendBytes(std::vector<uint8_t>& Out, const void* Data, size_t Size)
+	{
+		const uint8_t* Bytes = static_cast<const uint8_t*>(Data);
+		Out.insert(Out.end(), Bytes, Bytes + Size);
+	}
+
+	template <typename T>
+	inline void AppendPod(std::vector<uint8_t>& Out, const T& Value)
+	{
+		AppendBytes(Out, &Value, sizeof(Value));
+	}
+
+	inline void AppendString(std::vector<uint8_t>& Out, const std::string& Value)
+	{
+		const uint32_t Length = static_cast<uint32_t>(Value.size());
+		AppendPod(Out, Length);
+		AppendBytes(Out, Value.data(), Value.size());
+	}
+
+	template <typename T>
+	inline bool ReadPod(const std::vector<uint8_t>& Data, size_t& Offset, T& Out)
+	{
+		if (Offset > Data.size() || sizeof(T) > Data.size() - Offset)
+			return false;
+
+		std::memcpy(&Out, Data.data() + Offset, sizeof(T));
+		Offset += sizeof(T);
+		return true;
+	}
+
+	inline bool ReadString(const std::vector<uint8_t>& Data, size_t& Offset, std::string& Out)
+	{
+		uint32_t Length = 0;
+		if (!ReadPod(Data, Offset, Length))
+			return false;
+		if (Offset > Data.size() || Length > Data.size() - Offset)
+			return false;
+
+		Out.assign(reinterpret_cast<const char*>(Data.data() + Offset), Length);
+		Offset += Length;
+		return true;
+	}
+
+	inline netnode OpenPersistNode(bool bCreate)
+	{
+		return netnode(PersistNodeName, 0, bCreate);
 	}
 }
 
@@ -106,9 +166,109 @@ inline ExecFuncSignature ParseExecSignature(std::string_view Encoded)
 	return Sig;
 }
 
+inline bool SaveCurrentIdbSignaturesToIdb()
+{
+	using namespace ExecSignatureDetail;
+
+	netnode Node = OpenPersistNode(true);
+	if (Node == BADNODE)
+		return false;
+
+	const auto& Signatures = CurrentIdbSignatures();
+	std::vector<uint8_t> Blob;
+	Blob.reserve(Signatures.size() * 128);
+
+	AppendPod(Blob, PersistMagic);
+	AppendPod(Blob, PersistVersion);
+	const uint32_t Count = static_cast<uint32_t>(Signatures.size());
+	AppendPod(Blob, Count);
+
+	for (const auto& [ThunkEA, Signature] : Signatures)
+	{
+		const uint64_t StoredEA = static_cast<uint64_t>(ThunkEA);
+		uint8_t Flags = 0;
+		if (Signature.bHasCppTypeSignature)
+			Flags |= PersistFlagCppTypeSignature;
+		if (Signature.bHasFallbackSignature)
+			Flags |= PersistFlagFallbackSignature;
+		if (Signature.bHasCppUnmangledName)
+			Flags |= PersistFlagCppUnmangledName;
+
+		AppendPod(Blob, StoredEA);
+		AppendPod(Blob, Flags);
+		AppendString(Blob, Signature.CppTypeSignature);
+		AppendString(Blob, Signature.CppUnmangledName);
+		AppendString(Blob, Signature.FallbackEncodedSignature);
+	}
+
+	return Node.setblob(Blob.data(), Blob.size(), PersistBlobIndex, PersistBlobTag);
+}
+
+inline void ClearPersistedExecSignatures()
+{
+	using namespace ExecSignatureDetail;
+
+	netnode Node = OpenPersistNode(false);
+	if (Node != BADNODE)
+		Node.delblob(PersistBlobIndex, PersistBlobTag);
+}
+
+inline bool LoadPersistedExecSignaturesFromIdb()
+{
+	using namespace ExecSignatureDetail;
+
+	netnode Node = OpenPersistNode(false);
+	if (Node == BADNODE)
+		return false;
+
+	qvector<uint8_t> StoredBlob;
+	if (Node.getblob(&StoredBlob, PersistBlobIndex, PersistBlobTag) <= 0)
+		return false;
+
+	std::vector<uint8_t> Blob(StoredBlob.begin(), StoredBlob.end());
+	size_t Offset = 0;
+	uint32_t Magic = 0;
+	uint32_t Version = 0;
+	uint32_t Count = 0;
+	if (!ReadPod(Blob, Offset, Magic) || !ReadPod(Blob, Offset, Version) || !ReadPod(Blob, Offset, Count))
+		return false;
+	if (Magic != PersistMagic || Version != PersistVersion)
+		return false;
+
+	auto& Signatures = CurrentIdbSignatures();
+	Signatures.clear();
+
+	for (uint32_t i = 0; i < Count; ++i)
+	{
+		uint64_t StoredEA = 0;
+		uint8_t Flags = 0;
+		RegisteredExecSignature Signature;
+		if (!ReadPod(Blob, Offset, StoredEA) || !ReadPod(Blob, Offset, Flags))
+			return false;
+		if (!ReadString(Blob, Offset, Signature.CppTypeSignature)
+			|| !ReadString(Blob, Offset, Signature.CppUnmangledName)
+			|| !ReadString(Blob, Offset, Signature.FallbackEncodedSignature))
+		{
+			return false;
+		}
+
+		Signature.bHasCppTypeSignature = (Flags & PersistFlagCppTypeSignature) != 0;
+		Signature.bHasFallbackSignature = (Flags & PersistFlagFallbackSignature) != 0;
+		Signature.bHasCppUnmangledName = (Flags & PersistFlagCppUnmangledName) != 0;
+		if (Signature.bHasFallbackSignature)
+			Signature.FallbackSignature = ParseExecSignature(Signature.FallbackEncodedSignature);
+
+		Signatures[static_cast<ea_t>(StoredEA)] = std::move(Signature);
+	}
+
+	msg("[IDAMappingsImporter] Loaded %zu persisted exec signatures from IDB.\n", Signatures.size());
+	return true;
+}
+
 inline void RegisterExecSignature(ea_t ThunkEA, std::string_view Encoded)
 {
 	RegisteredExecSignature& Signature = CurrentIdbSignatures()[ThunkEA];
+	Signature.FallbackEncodedSignature = Encoded;
 	Signature.FallbackSignature = ParseExecSignature(Encoded);
 	Signature.bHasFallbackSignature = true;
 }

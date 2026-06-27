@@ -26,11 +26,6 @@
 #include "FNameConstantNamer.hpp"
 
 
-// DEBUGGING
-#include <iostream>
-#include <Windows.h>
-
-
 namespace fs = std::filesystem;
 
 enum class EAvailableFoldersStatus : uint8
@@ -83,10 +78,8 @@ struct CppSDKImportCheck
 public:
 	friend bool ParseSDKHeaderWithClang(const fs::path& HeaderPath, bool bForceImport);
 
-private:
 	static constexpr const char* ImportFlagTypeName = "YesWeImportedTheCppSDK";
 
-private:
 	static inline void CreateImportFlagType()
 	{
 		udt_type_data_t Udt;
@@ -313,6 +306,8 @@ bool ReadAndParseIDAMappings(const fs::path& IDAMappingsFilePath, bool bImportTy
 		BuildStaticClassPrefixCache(PrefixParser);
 
 		LoadMappings(std::move(Buffer), ImageBase, bImportTypes);
+		if (SaveCurrentIdbSignaturesToIdb())
+			msg("[IDAMappingsImporter] Persisted %zu exec signatures to IDB.\n", CurrentIdbSignatures().size());
 	}
 	else
 	{
@@ -354,10 +349,67 @@ fs::path FindFileWithExtensionInPath(const fs::path& PathToSearch, std::string E
 	return {};
 }
 
+enum class ETypeSource
+{
+	Idaclang,
+	Mappings,
+	None
+};
+
+struct AskForSDKImportResult
+{
+	ETypeSource TypeSource;
+	bool bIDAMappingsAvailable;
+};
+
+std::optional<AskForSDKImportResult> AskForSDKImport(EAvailableFoldersStatus FolderStatus)
+{
+	const bool bCppSDKAvailable = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::CppSDK);
+	const bool bIDAMappingsAvailable = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings);
+
+	qstrvec_t TypeChoices;
+	std::vector<ETypeSource> TypeActions;
+
+	if (bCppSDKAvailable)
+	{
+		TypeChoices.push_back("idaclang (recommended)");
+		TypeActions.push_back(ETypeSource::Idaclang);
+	}
+
+	if (bIDAMappingsAvailable)
+	{
+		TypeChoices.push_back("Mappings");
+		TypeActions.push_back(ETypeSource::Mappings);
+	}
+
+	TypeChoices.push_back("Don't import types");
+	TypeActions.push_back(ETypeSource::None);
+
+	static const char TypeSourceForm[] =
+		"Import UE types\n"
+		"\n"
+		"Source for class/struct types (names + functions import either way):\n"
+		"\n"
+		"  <Type source:b1:0:50::>\n"
+		"\n";
+
+	int TypeSel = 0; // default: first (and recommended) available option
+	if (ask_form(TypeSourceForm, &TypeChoices, &TypeSel) <= 0)
+		return std::nullopt; // user cancelled
+
+	if (TypeSel < 0 || TypeSel >= static_cast<int>(TypeActions.size()))
+		return std::nullopt;
+
+	return { { TypeActions[TypeSel], bIDAMappingsAvailable } };
+}
+
+
 struct IDAMappingsPlugin : public plugmod_t
 {
 	IDAMappingsPlugin()
 	{
+		GHasCppSDKTypes = CppSDKImportCheck::HasImportFlagType();
+		LoadPersistedExecSignaturesFromIdb();
 		InstallExecRenameAction();
 	}
 
@@ -366,91 +418,8 @@ struct IDAMappingsPlugin : public plugmod_t
 		UninstallExecRenameAction();
 	}
 
-	enum class ETypeSource
-	{
-		Idaclang,
-		Mappings,
-		None
-	};
-
-	struct AskForSDKImportResult
-	{
-		ETypeSource TypeSource;
-		bool bIDAMappingsAvailable;
-	};
-
-	std::optional<AskForSDKImportResult> AskForSDKImport(EAvailableFoldersStatus FolderStatus)
-	{
-		const bool bCppSDKAvailable = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::CppSDK);
-		const bool bIDAMappingsAvailable = (FolderStatus == EAvailableFoldersStatus::All || FolderStatus == EAvailableFoldersStatus::IDAMappings);
-
-		qstrvec_t TypeChoices;
-		std::vector<ETypeSource> TypeActions;
-
-		if (bCppSDKAvailable)
-		{
-			TypeChoices.push_back("idaclang (recommended)");
-			TypeActions.push_back(ETypeSource::Idaclang);
-		}
-
-		if (bIDAMappingsAvailable)
-		{
-			TypeChoices.push_back("Mappings");
-			TypeActions.push_back(ETypeSource::Mappings);
-		}
-
-		TypeChoices.push_back("Don't import types");
-		TypeActions.push_back(ETypeSource::None);
-
-		static const char TypeSourceForm[] =
-			"Import UE types\n"
-			"\n"
-			"Source for class/struct types (names + functions import either way):\n"
-			"\n"
-			"  <Type source:b1:0:50::>\n"
-			"\n";
-
-		int TypeSel = 0; // default: first (and recommended) available option
-		if (ask_form(TypeSourceForm, &TypeChoices, &TypeSel) <= 0)
-			return std::nullopt; // user cancelled
-
-		if (TypeSel < 0 || TypeSel >= static_cast<int>(TypeActions.size()))
-			return std::nullopt;
-
-		return {{ TypeActions[TypeSel], bIDAMappingsAvailable }};
-	}
-
 	bool idaapi run(size_t) override
 	{
-		AllocConsole();
-		FILE* Dummy;
-		freopen_s(&Dummy, "CONOUT$", "w", stderr);
-		std::cerr.clear(); // clear internal error flags on cerr after redirect
-		freopen_s(&Dummy, "CONIN$", "r", stdin);
-
-		std::cerr << "Initializing [Dumper-7]\n";
-
-
-		//tinfo_t FuncType;
-		//qstring OutName;
-		//if (parse_decl(&FuncType, &OutName, get_idati(),
-		//	"class UCanvasRenderTarget2D* CreateCanvasRenderTarget2D(class UObject* WorldContextObject, TSubclassOf<class UCanvasRenderTarget2D> CanvasRenderTarget2DClass, int32 Width, int32 Height);",
-		//	PT_SIL | PT_VAR | PT_HIGH | PT_NDC | PT_RELAXED))
-		//{
-		//	if (!apply_tinfo(0x1800845F4, FuncType, TINFO_DEFINITE))
-		//	{
-		//		msg("[IDAMappingsImporter] Failed to apply type for %s at 0x%llX\n", "class UCanvasRenderTarget2D* CreateCanvasRenderTarget2D(class UObject* WorldContextObject, TSubclassOf<class UCanvasRenderTarget2D> CanvasRenderTarget2DClass, int32 Width, int32 Height)", static_cast<uint64>(0x1800845F4F4));
-		//		return true;
-		//	}
-		//}
-		//else
-		//{
-		//	msg("[IDAMappingsImporter] Failed to parse type for %s\n", "class UCanvasRenderTarget2D* CreateCanvasRenderTarget2D(class UObject* WorldContextObject, TSubclassOf<class UCanvasRenderTarget2D> CanvasRenderTarget2DClass, int32 Width, int32 Height)");
-		//	return true;
-		//}
-		//msg("[IDAMappingsImporter] Applied type for %s at 0x%llX\n", "class UCanvasRenderTarget2D* CreateCanvasRenderTarget2D(class UObject* WorldContextObject, TSubclassOf<class UCanvasRenderTarget2D> CanvasRenderTarget2DClass, int32 Width, int32 Height)", static_cast<uint64>(0x1800845F4));
-		//return true;
-
 		const auto [PathToDumperGeneratedDirectory, FolderStatus] = AskForSDKFolder("C:\\Dumper-7\\");
 
 		if (FolderStatus == EAvailableFoldersStatus::None)
@@ -475,6 +444,7 @@ struct IDAMappingsPlugin : public plugmod_t
 
 		ClearStaticClassPrefixCache(); // fresh per run since only the V2 path repopulates it
 		CurrentIdbSignatures().clear(); // same deal: cleared every run so a V1/no-map import can't reuse stale V2 prototypes
+		ClearPersistedExecSignatures();
 
 		// Always import the .idmap when present (names / exec-funcs / globals) and only build types from it in Mappings mode
 		if (bIDAMappingsAvailable)

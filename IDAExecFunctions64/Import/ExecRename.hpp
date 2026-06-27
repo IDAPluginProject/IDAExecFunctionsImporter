@@ -432,6 +432,11 @@ struct ExecApplySignatureActionHandler : public action_handler_t
 
 		if (vdui_t* CurrentView = get_widget_vdui(Context->widget))
 		{
+			msg(
+				"[IDAMappingsImporter] Apply target=vtable name=%s type=%s\n",
+				CppUnmangledName != nullptr ? CppUnmangledName->c_str() : "<none>",
+				SignatureText.c_str());
+
 			if (ApplyVTableTypeViaPseudocodeXrefs(CurrentView, FunctionType, CppUnmangledName))
 			{
 				msg("[IDAMappingsImporter] SET SIGNATURE via IDA-VTable-Utility: %s\n", SignatureText.c_str());
@@ -458,6 +463,12 @@ struct ExecApplySignatureActionHandler : public action_handler_t
 			msg("[IDAMappingsImporter] Function 0x%llX is not called from this exec thunk.\n", static_cast<uint64>(TargetAddress));
 			return 0;
 		}
+
+		msg(
+			"[IDAMappingsImporter] Apply target=normal address=0x%llX name=%s type=%s\n",
+			static_cast<uint64>(TargetAddress),
+			CppUnmangledName != nullptr ? CppUnmangledName->c_str() : "<none>",
+			SignatureText.c_str());
 
 		if (apply_tinfo(TargetAddress, FunctionType, TINFO_DEFINITE))
 		{
@@ -511,20 +522,23 @@ struct ExecRenameUiListener : public event_listener_t
 	}
 };
 
-inline ExecRenameActionHandler         GExecRenameHandler;
-inline ExecApplySignatureActionHandler GExecApplySignatureHandler;
-inline ExecRenameUiListener            GExecRenameListener;
-inline int                             GExecRenameRefCount = 0;
+inline ExecRenameActionHandler*         GExecRenameHandler = nullptr;
+inline ExecApplySignatureActionHandler* GExecApplySignatureHandler = nullptr;
+inline ExecRenameUiListener             GExecRenameListener;
+inline int                              GExecRenameRefCount = 0;
 
 inline void InstallExecRenameAction()
 {
 	if (GExecRenameRefCount++ > 0)
 		return;
 
+	GExecRenameHandler = new ExecRenameActionHandler();
+	GExecApplySignatureHandler = new ExecApplySignatureActionHandler();
+
 	const action_desc_t Desc = ACTION_DESC_LITERAL_OWNER(
 		ExecRenameActionName,
 		"Rename UE exec target function",
-		&GExecRenameHandler,
+		GExecRenameHandler,
 		nullptr,        // no plugmod owner: the action is process-wide
 		"Alt-U",
 		"Rename the highlighted sub_XXXX to the real UE function (from the enclosing exec thunk)",
@@ -536,7 +550,7 @@ inline void InstallExecRenameAction()
 	const action_desc_t ApplySignatureDesc = ACTION_DESC_LITERAL_OWNER(
 		ExecApplySignatureActionName,
 		"Apply UE exec target function signature",
-		&GExecApplySignatureHandler,
+		GExecApplySignatureHandler,
 		nullptr,        // no plugmod owner: the action is process-wide
 		"Ctrl+Alt+Q",
 		"Apply the enclosing UE exec thunk signature to the function under the cursor",
@@ -556,4 +570,6 @@ inline void UninstallExecRenameAction()
 	unhook_event_listener(HT_UI, &GExecRenameListener);
 	unregister_action(ExecApplySignatureActionName);
 	unregister_action(ExecRenameActionName);
+	GExecApplySignatureHandler = nullptr;
+	GExecRenameHandler = nullptr;
 }

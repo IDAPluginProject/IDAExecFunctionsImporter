@@ -317,6 +317,22 @@ __pycache__/
 tools/ida_quick_exit.py
 tools/ida_shutdown_smoke.py
 
+# Local temporary checkouts and scratch builds
+/.tmp-*/
+/build/
+
+# Generated test and smoke-test artifacts
+/ida_batch_logs/
+/test-results/
+/test_output/
+/test-output/
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
 # Tabs Studio
 *.tss
 

@@ -14,6 +14,21 @@
 - Add the SDKs `\lib\x64_win_vc_64` director to the projects `Additional Library Directories`
 - Select your IDA installations' `\plugins\` folder as your `Output Directory`
 
+### IDA mappings visualizer
+
+The repository includes a stdlib-only Python/Tkinter visualizer for modern `.idmap`
+files and legacy identifier streams:
+
+```powershell
+python tools\idmap_visualizer.py path\to\file.idmap
+```
+
+For parser-only inspection without opening the GUI:
+
+```powershell
+python tools\idmap_visualizer.py path\to\file.idmap --dump-json
+```
+
 -----
 
 ### Format expected by the plugin:

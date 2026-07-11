@@ -313,16 +313,14 @@ __pycache__/
 # tools/**
 # !tools/packages.config
 
-# Local IDA smoke-test helpers
-tools/ida_quick_exit.py
-tools/ida_shutdown_smoke.py
+# Local AI-generated scripts, logs, and scratch artifacts
+/.ai-work/
 
 # Local temporary checkouts and scratch builds
 /.tmp-*/
 /build/
 
 # Generated test and smoke-test artifacts
-/ida_batch_logs/
 /test-results/
 /test_output/
 /test-output/

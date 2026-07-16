@@ -25,8 +25,7 @@ jobs:
           - ida_version: "9.3"
             sdk_ref: v9.3.1-release
           - ida_version: "9.4"
-            # Pin this to the v9.4.x-release tag once Hex-Rays publishes it.
-            sdk_ref: main
+            sdk_ref: v9.4.0-release
 
     steps:
       - name: Check out repository

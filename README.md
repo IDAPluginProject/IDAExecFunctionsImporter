@@ -94,7 +94,7 @@ The importer accepts modern V2 `.idmap` files and legacy V1 identifier streams.
 Clone the official SDK into `IDA-SDK` using the tag that matches your target IDA version:
 
 ```powershell
-git clone --recursive --branch v9.3.1-release https://github.com/HexRaysSA/ida-sdk.git IDA-SDK
+git clone --recursive --branch v9.4.0-release https://github.com/HexRaysSA/ida-sdk.git IDA-SDK
 ```
 
 The expected layout is:
@@ -132,7 +132,7 @@ From a Visual Studio Developer PowerShell prompt:
 msbuild IDAExecFunctions64.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
-Use the SDK tag matching the IDA version you intend to support. The included GitHub Actions workflow builds separate artifacts for IDA 9.2, 9.3, and 9.4/latest.
+Use the SDK tag matching the IDA version you intend to support. The included GitHub Actions workflow builds separate artifacts for IDA 9.2, 9.3, and 9.4.
 
 ## `.idmap` V1 record format
 

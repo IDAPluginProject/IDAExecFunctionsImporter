@@ -37,10 +37,6 @@ The imported mappings associate exec functions with their native implementations
   <img width="458" height="41" alt="image" src="https://github.com/user-attachments/assets/d5bc448b-9f3e-4aae-8db3-87bd269e4ff2" />\
   <sup>**after**</sup>
 
-
-### Native implementation called by the exec function
-
-
 ## Imported types and global symbols
 
 The C++ SDK import adds Unreal classes, structs, fields, and function declarations. The mapping import names supported global symbols like `GObjects`.
@@ -49,7 +45,7 @@ The C++ SDK import adds Unreal classes, structs, fields, and function declaratio
 | --------- | -------- |
 |<img width="534" height="369" alt="image" src="https://github.com/user-attachments/assets/94cfde8c-257a-469b-8597-d5e0c5a2a6bb" /> | <img width="540" height="347" alt="image" src="https://github.com/user-attachments/assets/6cae5a77-a53a-4be5-83d3-9479f792e7c9" /> |
 
-
+## SDK imported types
 ![Hex-Rays pseudocode using imported Unreal types and the named GObjects global](docs/images/typed-native-function.png)
 
 ## VTables and class hierarchies

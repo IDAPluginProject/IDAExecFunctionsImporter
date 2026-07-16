@@ -23,17 +23,32 @@ IDA plugin for importing Unreal Engine symbols and types from the `CppSDK` and `
 
 The imported mappings associate exec functions with their native implementations. Place the cursor on the implementation call inside an exec function and press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Q</kbd>. The plugin resolves the call target and applies its mapped name and prototype.
 
-### Imported exec function
+### Importing native function info
 
-![An imported Unreal exec function calling its native implementation](docs/images/exec-thunk-before.png)
+1. ExecFunction:\
+  <img width="600" height="85" alt="image" src="https://github.com/user-attachments/assets/96c2fb7e-f3da-4da0-b8fb-bbf7643b6665" />\
+  <sup>**before**</sup>\
+  <img width="608" height="83" alt="image" src="https://github.com/user-attachments/assets/90e55957-1662-412c-9406-2eac01429d5f" />\
+  <sup>**after**</sup>
+
+3. Native Implementation:\
+  <img width="459" height="41" alt="image" src="https://github.com/user-attachments/assets/06c19177-7c7b-4927-9557-6a4636f358bd" />\
+  <sup>**before**</sup>\
+  <img width="458" height="41" alt="image" src="https://github.com/user-attachments/assets/d5bc448b-9f3e-4aae-8db3-87bd269e4ff2" />\
+  <sup>**after**</sup>
+
 
 ### Native implementation called by the exec function
 
-![The native implementation called by the exec function, with its Unreal name and types](docs/images/native-implementation-after.png)
 
 ## Imported types and global symbols
 
 The C++ SDK import adds Unreal classes, structs, fields, and function declarations. The mapping import names supported global symbols like `GObjects`.
+
+| <!-- -->  | <!-- --> |
+| --------- | -------- |
+|<img width="534" height="369" alt="image" src="https://github.com/user-attachments/assets/94cfde8c-257a-469b-8597-d5e0c5a2a6bb" /> | <img width="540" height="347" alt="image" src="https://github.com/user-attachments/assets/6cae5a77-a53a-4be5-83d3-9479f792e7c9" /> |
+
 
 ![Hex-Rays pseudocode using imported Unreal types and the named GObjects global](docs/images/typed-native-function.png)
 
